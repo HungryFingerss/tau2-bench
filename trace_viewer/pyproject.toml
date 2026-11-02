@@ -1,0 +1,33 @@
+[project]
+name = "tau2-trace-viewer"
+version = "0.1.0"
+description = "Local web viewer for tau2-bench runs, down to the raw model calls."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115.11",
+    "jsonschema>=4.23.0",
+    "pyyaml>=6.0.2",
+    "uvicorn>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.24.0",
+    "pytest>=8.3.5",
+    "ruff>=0.9.1",
+]
+
+# This is an app, not a library: nothing to build or install.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E501", "F541"]

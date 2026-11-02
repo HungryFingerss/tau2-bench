@@ -1,0 +1,821 @@
+# The default llm_agent, as it stands in the benchmark.
+#
+# Decisions are written by hand from the source. tests/test_designs.py checks every
+# cited symbol and line range against the real code, and checks that the prompt text
+# and tool list below match what the code and saved runs contain. If a cited file
+# changes, the viewer warns that line numbers may be off.
+
+version: v0-baseline
+title: Default llm_agent
+description: >-
+  The benchmark's stock agent: a thin wrapper that sends the policy and the full
+  conversation to the model on every turn and acts on whatever comes back. Nearly
+  every rule in the policy reaches the model as text, with no code behind it.
+
+applies_to:
+  agent_implementation: llm_agent
+
+# What record_run.py saves a git diff of. config.py and the evaluator are included
+# because local edits there change how a run behaves or is scored, and the run's
+# saved git commit does not show uncommitted changes.
+code_paths:
+  - src/tau2/agent
+  - src/tau2/config.py
+  - src/tau2/evaluator
+
+parameters:
+  model: Set per run with --agent-llm.
+  temperature: 0.0, from DEFAULT_LLM_ARGS_AGENT unless --agent-llm-args overrides it.
+  seed: A per-trial seed set by the runner, so each trial is reproducible.
+  num_retries: 3, from DEFAULT_MAX_RETRIES. These retry failed API calls only.
+  max_tokens: Not set. The provider default applies.
+  max_steps: 200, from DEFAULT_MAX_STEPS.
+  max_errors: 10, from DEFAULT_MAX_ERRORS.
+
+system_prompt:
+  instruction: |-
+    You are a customer service agent that helps the user according to the <policy> provided below.
+    In each turn you can either:
+    - Send a message to the user.
+    - Make a tool call.
+    You cannot do both at the same time.
+
+    Try to be helpful and always follow the policy. Always make sure you generate valid JSON only.
+  template: |-
+    <instructions>
+    {agent_instruction}
+    </instructions>
+    <policy>
+    {domain_policy}
+    </policy>
+  domain_policy: >-
+    The retail policy from data/tau2/domains/retail/policy.md, then a blank line, then
+    the language pack's agent_language_clause. That clause is inside <policy> in the
+    prompt, but it is not in the policy field saved in results.json.
+
+decisions:
+  - id: D1
+    name: System prompt is fixed instructions plus the policy
+    status: implemented
+    what: >-
+      Builds one system prompt per conversation from a short instruction, the retail
+      policy, and a language line. It never changes during the conversation.
+    code_enforces: Which text is sent. It is the same for every task.
+    left_to_model: Understanding and following everything in the prompt.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: AGENT_INSTRUCTION
+        lines: [24, 32]
+      - file: src/tau2/agent/llm_agent.py
+        symbol: SYSTEM_PROMPT
+        lines: [34, 41]
+      - file: src/tau2/agent/llm_agent.py
+        symbol: LLMAgent.system_prompt
+        lines: [88, 92]
+      - file: src/tau2/runner/build.py
+        symbol: agent_domain_policy
+        lines: [82, 89]
+      - file: src/tau2/multilingual/runtime.py
+        symbol: agent_language_guidance
+        lines: [843, 864]
+
+  - id: D2
+    name: Every tool is offered on every call
+    status: implemented
+    what: >-
+      All 16 retail tools are sent on each model call as function schemas built from
+      their docstrings, with tool_choice set to auto.
+    code_enforces: >-
+      The tool list is fixed. No tool is hidden based on the conversation, so write
+      tools are offered before identity is verified.
+    left_to_model: Which tool to call, when, and with what arguments.
+    source:
+      - file: src/tau2/runner/build.py
+        symbol: build_agent
+        lines: [144, 144]
+      - file: src/tau2/environment/environment.py
+        symbol: Environment.get_tools
+        lines: [77, 83]
+      - file: src/tau2/utils/llm_utils.py
+        symbol: _generate_once
+        lines: [648, 650]
+
+  - id: D3
+    name: Identity verification is prompt-only
+    status: not_handled
+    what: >-
+      The policy tells the agent to find the user ID first, but nothing checks that it
+      did. Account tools run whether or not identity was verified.
+    code_enforces: Nothing.
+    left_to_model: Remembering to verify identity, and doing it before anything else.
+    source:
+      - file: data/tau2/domains/retail/policy.md
+        lines: [10, 10]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: BaseOrchestrator._execute_tool_calls
+        lines: [327, 343]
+
+  - id: D4
+    name: One model call per incoming message
+    status: implemented
+    what: >-
+      Each customer message or tool result triggers one model call. If the reply has
+      tool calls, they run and the result triggers the next call. Otherwise the text
+      goes to the customer.
+    code_enforces: The turn order between agent, tools and customer.
+    left_to_model: Whether to reply or call a tool on each turn.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: LLMAgent._generate_next_message
+        lines: [125, 145]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: Orchestrator.step
+        lines: [840, 949]
+
+  - id: D5
+    name: The agent never ends the conversation itself
+    status: implemented
+    what: >-
+      The agent has no way to finish. A run ends when the simulated customer sends a
+      stop token, or when the step or error limit is reached.
+    code_enforces: The stop tokens and the limits.
+    left_to_model: Nothing. The agent keeps replying until it is stopped.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: LLMAgent.is_stop
+        lines: [81, 86]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: Orchestrator.step
+        lines: [862, 864]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: Orchestrator._check_termination
+        lines: [755, 771]
+      - file: src/tau2/user/user_simulator.py
+        symbol: UserSimulator.is_stop
+        lines: [141, 155]
+
+  - id: D6
+    name: Tool calls are not validated before they run
+    status: not_handled
+    what: >-
+      Whatever the model produces goes straight to the tool. A bad name or bad
+      arguments only surface as an exception from the tool itself.
+    code_enforces: Nothing before execution. Each tool checks its own inputs.
+    left_to_model: Producing a real tool name and valid arguments.
+    source:
+      - file: src/tau2/environment/environment.py
+        symbol: Environment.get_response
+        lines: [473, 498]
+      - file: src/tau2/environment/toolkit.py
+        symbol: ToolKitBase.use_tool
+        lines: [138, 142]
+
+  - id: D7
+    name: Tool errors go back to the model as plain text
+    status: implemented
+    what: >-
+      Any exception becomes a tool message starting with "Error:". The model sees only
+      that text, with no error flag. There is no retry logic, and 10 errors end the run.
+    code_enforces: Catching exceptions and counting errors towards the limit.
+    left_to_model: Noticing the error and deciding what to do about it.
+    source:
+      - file: src/tau2/environment/environment.py
+        symbol: Environment.get_response
+        lines: [487, 489]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: BaseOrchestrator._execute_tool_calls
+        lines: [340, 341]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: Orchestrator._check_termination
+        lines: [768, 770]
+      - file: src/tau2/utils/llm_utils.py
+        symbol: to_litellm_messages
+        lines: [256, 263]
+
+  - id: D8
+    name: The full history is resent on every call
+    status: implemented
+    what: >-
+      Every model call contains the system prompt and all messages so far. Nothing is
+      trimmed or summarized, and the model's reasoning from earlier turns is dropped.
+    code_enforces: Sending all past messages in order.
+    left_to_model: >-
+      Keeping track of everything by rereading it, without its own earlier reasoning.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: LLMAgent._generate_next_message
+        lines: [137, 137]
+      - file: src/tau2/utils/llm_utils.py
+        symbol: to_litellm_messages
+        lines: [234, 255]
+
+  - id: D9
+    name: Model parameters are minimal
+    status: implemented
+    what: >-
+      Temperature 0, a per-trial seed, and 3 retries on API failures. No token limit
+      is set.
+    code_enforces: These defaults, unless overridden on the command line.
+    left_to_model: Nothing.
+    source:
+      - file: src/tau2/config.py
+        symbol: DEFAULT_LLM_ARGS_AGENT
+        lines: [34, 34]
+      - file: src/tau2/config.py
+        symbol: DEFAULT_MAX_RETRIES
+        lines: [72, 72]
+      - file: src/tau2/agent/base/llm_config.py
+        symbol: LLMConfigMixin.set_seed
+        lines: [41, 48]
+      - file: src/tau2/utils/llm_utils.py
+        symbol: _generate_once
+        lines: [612, 613]
+
+  - id: D10
+    name: The greeting is scripted
+    status: implemented
+    what: >-
+      The conversation opens with a fixed line from the language pack. No model call
+      is made for it, but the model sees it as its own message in the history.
+    code_enforces: The exact opening line.
+    left_to_model: Nothing.
+    source:
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: BaseOrchestrator.initial_agent_message
+        lines: [146, 153]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: DEFAULT_FIRST_AGENT_MESSAGE
+        lines: [48, 50]
+
+  - id: D11
+    name: Confirmation before writes is prompt-only
+    status: not_handled
+    what: >-
+      The policy and tool descriptions ask for an explicit yes, but write tools run
+      with no check that the customer gave one.
+    code_enforces: Nothing.
+    left_to_model: Listing the details, asking, and waiting for a yes.
+    source:
+      - file: data/tau2/domains/retail/policy.md
+        lines: [16, 16]
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: BaseOrchestrator._execute_tool_calls
+        lines: [327, 343]
+
+  - id: D12
+    name: One action per turn is prompt-only
+    status: not_handled
+    what: >-
+      The instructions forbid mixing text with a tool call, but the benchmark's check
+      for this is off by default, so a mixed message is accepted and both parts apply.
+    code_enforces: Nothing, unless --enforce-communication-protocol is passed.
+    left_to_model: Doing one thing per turn.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: AGENT_INSTRUCTION
+        lines: [26, 29]
+      - file: src/tau2/cli.py
+        symbol: add_run_args
+        lines: [247, 251]
+
+  - id: D13
+    name: Repeated tool calls are not stopped
+    status: not_handled
+    what: >-
+      Nothing notices the same failing call being made again and again. The loop only
+      ends when the error limit is reached.
+    code_enforces: Nothing, apart from the error limit in D7.
+    left_to_model: Changing course after a call fails.
+    source:
+      - file: src/tau2/orchestrator/orchestrator.py
+        symbol: BaseOrchestrator._execute_tool_calls
+        lines: [327, 343]
+
+  - id: D14
+    name: Reading tool results is left to the model
+    status: not_handled
+    what: >-
+      Tool results arrive as raw JSON. Nothing filters or summarizes them, so for
+      example unavailable variants look the same as available ones until the model
+      reads each available flag.
+    code_enforces: Nothing beyond converting the result to JSON.
+    left_to_model: Reading every field correctly, including counting and filtering.
+    source:
+      - file: src/tau2/environment/environment.py
+        symbol: Environment.get_response
+        lines: [491, 491]
+      - file: src/tau2/environment/environment.py
+        symbol: Environment.to_json_str
+        lines: [420, 449]
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.get_product_details
+        lines: [393, 407]
+
+  - id: D15
+    name: No record of the customer's conditions or a plan
+    status: not_handled
+    what: >-
+      The agent's only state is the message list. It has no structured record of what
+      the customer wants, their conditions, what was agreed, or what is left to do.
+    code_enforces: Nothing.
+    left_to_model: Tracking conditions and changes of mind from the raw conversation.
+    source:
+      - file: src/tau2/agent/llm_agent.py
+        symbol: LLMAgentState
+        lines: [44, 48]
+
+  - id: D16
+    name: Store rules are enforced inside the tools
+    status: implemented
+    what: >-
+      Tools check rules such as order status, allowed cancel reasons, that a new item
+      is available and belongs to the same product, gift card balance, and which
+      payment method a refund can go to.
+    code_enforces: These rules, by raising an error the model then sees.
+    left_to_model: Choosing an action that passes them, and recovering when one fails.
+    source:
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.cancel_pending_order
+        lines: [190, 237]
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.exchange_delivered_order_items
+        lines: [239, 316]
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.modify_pending_order_items
+        lines: [499, 587]
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.return_delivered_order_items
+        lines: [708, 759]
+
+  - id: D17
+    name: Escalation is prompt-only
+    status: not_handled
+    what: >-
+      The policy says when to transfer to a human. The tool only returns "Transfer
+      successful", and nothing checks that the transfer was justified.
+    code_enforces: Nothing.
+    left_to_model: Deciding that a request truly cannot be handled.
+    source:
+      - file: data/tau2/domains/retail/policy.md
+        lines: [24, 24]
+      - file: src/tau2/domains/retail/tools.py
+        symbol: RetailTools.transfer_to_human_agents
+        lines: [776, 790]
+
+  - id: D18
+    name: Malformed tool-call JSON crashes the simulation
+    status: not_handled
+    what: >-
+      Tool arguments are parsed with no guard. Invalid JSON raises an exception, so the
+      whole simulation fails and is retried as an infrastructure error, and the model
+      never gets a chance to correct itself.
+    code_enforces: Nothing.
+    left_to_model: Producing valid JSON. The instruction only asks it to.
+    source:
+      - file: src/tau2/utils/llm_utils.py
+        symbol: _generate_once
+        lines: [704, 711]
+      - file: src/tau2/runner/progress.py
+        symbol: run_with_retry
+        lines: [96, 107]
+
+# Decisions suggested when a label is added on a task. They can be changed per task.
+label_links:
+  wrong-variant-choice: [D14, D15]
+  misread-tool-output: [D14]
+  incomplete-lookup: [D15, D17]
+  malformed-tool-call: [D6, D13, D18]
+  ignored-customer-change: [D15]
+  skipped-identity-check: [D3]
+  unconfirmed-write: [D11]
+  setup-problem: []
+
+# Generated from the code and a saved agent call. Hashes detect stale line numbers.
+source_hashes:
+  data/tau2/domains/retail/policy.md: 2c9652afbce57d6e087768d37cda64d31c53d50b3e3225cfdb791bac66466467
+  src/tau2/agent/base/llm_config.py: 3b5bf4c5f69e5df5357374a9e379e6932096bcdbfcf3e411c4791c33d73d35b4
+  src/tau2/agent/llm_agent.py: 7b8cd814cb44ccccd86d58242e39ec3767a1f02213cd05c9771b6d0675b37b0b
+  src/tau2/cli.py: da9738c5930af994356ab3bbb4ad116dbd7414df5053d8cf68924bda260af3c6
+  src/tau2/config.py: 723cf7e942580ea54982508a10666b6ef884ef5cbcea6e3de8d3f2a53e18c5aa
+  src/tau2/domains/retail/tools.py: d0a9afdd44dbb1e7b1b4d19e0acf8ba9e3c99db78f775383a4b63fe5b0ccf52a
+  src/tau2/environment/environment.py: b3edf22c4d11234cc8794807a8c5ba47ef84555a9726243a0e8684b7821826ba
+  src/tau2/environment/toolkit.py: 3e897891e8878c3399aec72e42eb0eb5546642420c0c902b225421fc936b924a
+  src/tau2/multilingual/runtime.py: 4d1961be05f76a7de92b2c673283a5383734c58965364b948b319391ec480b61
+  src/tau2/orchestrator/orchestrator.py: f85cc90d188418c74f1d782e5d25cc1a96cd2a5ad40c3d5d0382febe2addee89
+  src/tau2/runner/build.py: c54c8383da51a435b777c934f9e4fab73204381f5cf9443616f637fa1e0a4086
+  src/tau2/runner/progress.py: 7018fbea2ea3cf2bc92e6d22d2928dc2914418699e4bbe498367dd147d04d9cb
+  src/tau2/user/user_simulator.py: 01e27b999fa531950b889368958be5b61ab6a57b8d5eca3cc80f978904bbcbec
+  src/tau2/utils/llm_utils.py: 381ef322eff07b43b749d1ec9f9a64b352b59280e5355d0376c197c08abb34bc
+
+# The 16 tools exactly as sent to the model. Kind comes from @is_tool in tools.py.
+tools:
+- name: calculate
+  kind: generic
+  description: Calculate the result of a mathematical expression.
+  parameters:
+    properties:
+      expression:
+        description: The mathematical expression to calculate, such as '2 + 2'. The expression
+          can contain numbers, operators (+, -, *, /), parentheses, and spaces.
+        title: Expression
+        type: string
+    required:
+    - expression
+    title: parameters
+    type: object
+- name: cancel_pending_order
+  kind: write
+  description: 'Cancel a pending order. If the order is already processed or delivered,
+
+
+    it cannot be cancelled. The agent needs to explain the cancellation detail
+
+    and ask for explicit user confirmation (yes/no) to proceed. If the user confirms,
+
+    the order status will be changed to ''cancelled'' and the payment will be refunded.
+
+    The refund will be added to the user''s gift card balance immediately if the payment
+
+    was made using a gift card, otherwise the refund would take 5-7 business days to process.
+
+    The function returns the order details after the cancellation.'
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      reason:
+        description: The reason for cancellation, which should be either 'no longer needed'
+          or 'ordered by mistake'.
+        title: Reason
+        type: string
+    required:
+    - order_id
+    - reason
+    title: parameters
+    type: object
+- name: exchange_delivered_order_items
+  kind: write
+  description: 'Exchange items in a delivered order to new items of the same product type.
+
+
+    For a delivered order, return or exchange can be only done once by the agent.
+
+    The agent needs to explain the exchange detail and ask for explicit user confirmation
+    (yes/no) to proceed.'
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      item_ids:
+        description: The item ids to be exchanged, each such as '1008292230'. There could
+          be duplicate items in the list.
+        items:
+          type: string
+        title: Item Ids
+        type: array
+      new_item_ids:
+        description: 'The item ids to be exchanged for, each such as ''1008292230''.
+
+          There could be duplicate items in the list. Each new item id should match the item
+          id
+
+          in the same position and be of the same product.'
+        items:
+          type: string
+        title: New Item Ids
+        type: array
+      payment_method_id:
+        description: 'The payment method id to pay or receive refund for the item price difference,
+
+          such as ''gift_card_0000000'' or ''credit_card_0000000''. These can be looked up
+
+          from the user or order details.'
+        title: Payment Method Id
+        type: string
+    required:
+    - order_id
+    - item_ids
+    - new_item_ids
+    - payment_method_id
+    title: parameters
+    type: object
+- name: find_user_id_by_name_zip
+  kind: read
+  description: 'Find user id by first name, last name, and zip code. If the user is not found,
+    the function
+
+
+    will return an error message. By default, find user id by email, and only call this function
+
+    if the user is not found by email or cannot remember email.'
+  parameters:
+    properties:
+      first_name:
+        description: The first name of the customer, such as 'John'.
+        title: First Name
+        type: string
+      last_name:
+        description: The last name of the customer, such as 'Doe'.
+        title: Last Name
+        type: string
+      zip:
+        description: The zip code of the customer, such as '12345'.
+        title: Zip
+        type: string
+    required:
+    - first_name
+    - last_name
+    - zip
+    title: parameters
+    type: object
+- name: find_user_id_by_email
+  kind: read
+  description: Find user id by email. If the user is not found, the function will return an
+    error message.
+  parameters:
+    properties:
+      email:
+        description: The email of the user, such as 'something@example.com'.
+        title: Email
+        type: string
+    required:
+    - email
+    title: parameters
+    type: object
+- name: get_order_details
+  kind: read
+  description: Get the status and details of an order.
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+    required:
+    - order_id
+    title: parameters
+    type: object
+- name: get_product_details
+  kind: read
+  description: Get the inventory details of a product.
+  parameters:
+    properties:
+      product_id:
+        description: The product id, such as '6086499569'. Be careful the product id is different
+          from the item id.
+        title: Product Id
+        type: string
+    required:
+    - product_id
+    title: parameters
+    type: object
+- name: get_item_details
+  kind: read
+  description: Get the inventory details of an item.
+  parameters:
+    properties:
+      item_id:
+        description: The item id, such as '6086499569'. Be careful the item id is different
+          from the product id.
+        title: Item Id
+        type: string
+    required:
+    - item_id
+    title: parameters
+    type: object
+- name: get_user_details
+  kind: read
+  description: Get the details of a user, including their orders.
+  parameters:
+    properties:
+      user_id:
+        description: The user id, such as 'sara_doe_496'.
+        title: User Id
+        type: string
+    required:
+    - user_id
+    title: parameters
+    type: object
+- name: list_all_product_types
+  kind: read
+  description: 'List the name and product id of all product types.
+
+
+    Each product type has a variety of different items with unique item ids and options.
+
+    There are only 50 product types in the store.'
+  parameters:
+    properties: {}
+    title: parameters
+    type: object
+- name: modify_pending_order_address
+  kind: write
+  description: Modify the shipping address of a pending order. The agent needs to explain
+    the modification detail and ask for explicit user confirmation (yes/no) to proceed.
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      address1:
+        description: The first line of the address, such as '123 Main St'.
+        title: Address1
+        type: string
+      address2:
+        description: The second line of the address, such as 'Apt 1' or ''.
+        title: Address2
+        type: string
+      city:
+        description: The city, such as 'San Francisco'.
+        title: City
+        type: string
+      state:
+        description: The state, such as 'CA'.
+        title: State
+        type: string
+      country:
+        description: The country, such as 'USA'.
+        title: Country
+        type: string
+      zip:
+        description: The zip code, such as '12345'.
+        title: Zip
+        type: string
+    required:
+    - order_id
+    - address1
+    - address2
+    - city
+    - state
+    - country
+    - zip
+    title: parameters
+    type: object
+- name: modify_pending_order_items
+  kind: write
+  description: Modify items in a pending order to new items of the same product type. For
+    a pending order, this function can only be called once. The agent needs to explain the
+    exchange detail and ask for explicit user confirmation (yes/no) to proceed.
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      item_ids:
+        description: The item ids to be modified, each such as '1008292230'. There could be
+          duplicate items in the list.
+        items:
+          type: string
+        title: Item Ids
+        type: array
+      new_item_ids:
+        description: The item ids to be modified for, each such as '1008292230'. There could
+          be duplicate items in the list. Each new item id should match the item id in the
+          same position and be of the same product.
+        items:
+          type: string
+        title: New Item Ids
+        type: array
+      payment_method_id:
+        description: The payment method id to pay or receive refund for the item price difference,
+          such as 'gift_card_0000000' or 'credit_card_0000000'. These can be looked up from
+          the user or order details.
+        title: Payment Method Id
+        type: string
+    required:
+    - order_id
+    - item_ids
+    - new_item_ids
+    - payment_method_id
+    title: parameters
+    type: object
+- name: modify_pending_order_payment
+  kind: write
+  description: Modify the payment method of a pending order. The agent needs to explain the
+    modification detail and ask for explicit user confirmation (yes/no) to proceed.
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      payment_method_id:
+        description: The payment method id to pay or receive refund for the item price difference,
+          such as 'gift_card_0000000' or 'credit_card_0000000'. These can be looked up from
+          the user or order details.
+        title: Payment Method Id
+        type: string
+    required:
+    - order_id
+    - payment_method_id
+    title: parameters
+    type: object
+- name: modify_user_address
+  kind: write
+  description: Modify the default address of a user. The agent needs to explain the modification
+    detail and ask for explicit user confirmation (yes/no) to proceed.
+  parameters:
+    properties:
+      user_id:
+        description: The user id, such as 'sara_doe_496'.
+        title: User Id
+        type: string
+      address1:
+        description: The first line of the address, such as '123 Main St'.
+        title: Address1
+        type: string
+      address2:
+        description: The second line of the address, such as 'Apt 1' or ''.
+        title: Address2
+        type: string
+      city:
+        description: The city, such as 'San Francisco'.
+        title: City
+        type: string
+      state:
+        description: The state, such as 'CA'.
+        title: State
+        type: string
+      country:
+        description: The country, such as 'USA'.
+        title: Country
+        type: string
+      zip:
+        description: The zip code, such as '12345'.
+        title: Zip
+        type: string
+    required:
+    - user_id
+    - address1
+    - address2
+    - city
+    - state
+    - country
+    - zip
+    title: parameters
+    type: object
+- name: return_delivered_order_items
+  kind: write
+  description: 'Return some items of a delivered order.
+
+
+    The order status will be changed to ''return requested''.
+
+    The agent needs to explain the return detail and ask for explicit user confirmation (yes/no)
+    to proceed.
+
+    The user will receive follow-up email for how and where to return the item.'
+  parameters:
+    properties:
+      order_id:
+        description: The order id, such as '#W0000000'. Be careful there is a '#' symbol at
+          the beginning of the order id.
+        title: Order Id
+        type: string
+      item_ids:
+        description: The item ids to be returned, each such as '1008292230'. There could be
+          duplicate items in the list.
+        items:
+          type: string
+        title: Item Ids
+        type: array
+      payment_method_id:
+        description: 'The payment method id to pay or receive refund for the item price difference,
+          such as ''gift_card_0000000'' or ''credit_card_0000000''.
+
+          These can be looked up from the user or order details.'
+        title: Payment Method Id
+        type: string
+    required:
+    - order_id
+    - item_ids
+    - payment_method_id
+    title: parameters
+    type: object
+- name: transfer_to_human_agents
+  kind: generic
+  description: "Transfer the user to a human agent, with a summary of the user's issue.\n\n\
+    Only transfer if\n -  the user explicitly asks for a human agent\n -  given the policy\
+    \ and the available tools, you cannot solve the user's issue."
+  parameters:
+    properties:
+      summary:
+        description: A summary of the user's issue.
+        title: Summary
+        type: string
+    required:
+    - summary
+    title: parameters
+    type: object

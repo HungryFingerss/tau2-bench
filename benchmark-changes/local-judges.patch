@@ -1,0 +1,41 @@
+--- a/src/tau2/config.py
++++ b/src/tau2/config.py
+@@ -46,16 +46,20 @@
+ DEFAULT_ELICITATION_LLM_ARGS_USER = {"temperature": 0.0, "reasoning_effort": "low"}
+ DEFAULT_INTAKE_TASK_SEED = 20260824
+ 
+-DEFAULT_LLM_NL_ASSERTIONS = "gpt-5.4-mini-2026-03-17"
+-DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"reasoning_effort": "low"}
++# DEFAULT_LLM_NL_ASSERTIONS = "gpt-5.4-mini-2026-03-17"
++# DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"reasoning_effort": "low"}
++DEFAULT_LLM_NL_ASSERTIONS = "ollama_chat/gemma4:12b"
++DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"temperature": 0.0}
+ 
+ DEFAULT_LLM_ENV_INTERFACE = "gpt-4.1-2025-04-14"
+ DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE = 0.0
+ DEFAULT_LLM_ENV_INTERFACE_ARGS = {"temperature": DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE}
+ 
+ # Semantic communication scoring for every run; independent of the customer model.
+-DEFAULT_SEMANTIC_COMMUNICATE_MODEL = "gpt-5.5"
+-DEFAULT_SEMANTIC_COMMUNICATE_MODEL_ARGS = {"reasoning_effort": "low"}
++# DEFAULT_SEMANTIC_COMMUNICATE_MODEL = "gpt-5.5"
++# DEFAULT_SEMANTIC_COMMUNICATE_MODEL_ARGS = {"reasoning_effort": "low"}
++DEFAULT_SEMANTIC_COMMUNICATE_MODEL = "ollama_chat/gemma4:12b"
++DEFAULT_SEMANTIC_COMMUNICATE_MODEL_ARGS = {"temperature": 0.0}
+ 
+ DEFAULT_LLM_EVAL_USER_SIMULATOR = "claude-opus-4-5"
+ 
+--- a/src/tau2/evaluator/evaluator_nl_assertions.py
++++ b/src/tau2/evaluator/evaluator_nl_assertions.py
+@@ -120,7 +120,10 @@
+             call_name="nl_assertions_eval",
+             **DEFAULT_LLM_NL_ASSERTIONS_ARGS,
+         )
+-        result_data = json.loads(assistant_message.content)
++        # result_data = json.loads(assistant_message.content)
++        content = assistant_message.content or ""
++        start, end = content.find("{"), content.rfind("}")
++        result_data = json.loads(content[start : end + 1])
+         return [
+             NLAssertionCheck(
+                 nl_assertion=result["expectedOutcome"],

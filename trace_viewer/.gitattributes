@@ -1,0 +1,2 @@
+# cmd.exe expects CRLF, whatever the checkout's settings are.
+*.cmd text eol=crlf

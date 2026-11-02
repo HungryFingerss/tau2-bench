@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "run": "baseline-practice-10-v2",
+  "tasks": {
+    "0:0": {
+      "task_id": "0",
+      "trial": 0,
+      "sim_id": "e7f70b7e-78da-4f3e-a167-ac33c2c08c2d",
+      "labels": [
+        {
+          "id": "skipped-identity-check",
+          "decisions": [
+            "D3"
+          ]
+        }
+      ],
+      "note": "",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "1:0": {
+      "task_id": "1",
+      "trial": 0,
+      "sim_id": "edc44ac9-6bc4-44ac-b874-3794d3f99cc9",
+      "labels": [
+        {
+          "id": "skipped-identity-check",
+          "decisions": [
+            "D3"
+          ]
+        },
+        {
+          "id": "wrong-variant-choice",
+          "decisions": [
+            "D14",
+            "D15"
+          ]
+        },
+        {
+          "id": "assumed-customer-detail",
+          "decisions": [
+            "D11"
+          ]
+        }
+      ],
+      "note": "1. Skipped identity check: found the account from the order number and accepted 'yes, that's mine'.\n2. Ignored the customer's condition: exchanged the keyboard although the clicky + RGB + full-size variant wasn't available ('only the thermostat' was the instruction).\n3. Policy says the user must provide the payment method for an exchange; the agent chose the credit card itself.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "2:0": {
+      "task_id": "2",
+      "trial": 0,
+      "sim_id": "2f0f88f8-0043-4d5d-9676-8437a06148e8",
+      "labels": [
+        {
+          "id": "misread-tool-output",
+          "decisions": [
+            "D14"
+          ]
+        },
+        {
+          "id": "malformed-tool-call",
+          "decisions": [
+            "D13",
+            "D18",
+            "D6"
+          ]
+        }
+      ],
+      "note": "1. Told the customer 12 t-shirt options; only 10 are available (counted unavailable variants).\n2. Malformed tool calls: find_user_id_by_name_zip with empty name/zip, and two calls with an empty tool name.\n3. Checking every order was necessary: the user record lists order IDs without status, so each order must be opened to know its status.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "3:0": {
+      "task_id": "3",
+      "trial": 0,
+      "sim_id": "b0de0c28-ffac-4091-986d-780de8b991e6",
+      "labels": [
+        {
+          "id": "incomplete-lookup",
+          "decisions": [
+            "D15",
+            "D17"
+          ]
+        }
+      ],
+      "note": "1. Opened only 2 of the customer's 5 orders (#W6247578, #W9711842), never #W4776164, which is pending and has the small v-neck t-shirt. Concluded 'no such item'.\n2. When the customer asked to double-check, made no new lookups and transferred to a human 3 times.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "4:0": {
+      "task_id": "4",
+      "trial": 0,
+      "sim_id": "2f886c33-17f5-4887-9a08-e6f59e04eb0a",
+      "labels": [
+        {
+          "id": "misread-tool-output",
+          "decisions": [
+            "D14"
+          ]
+        }
+      ],
+      "note": "Both order changes were correct (DB check passed). Failed only on the NL check: said 12 t-shirt options instead of 10. The agent's wording ('all five pending orders') was wrong, but its actions were right.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "6:0": {
+      "task_id": "6",
+      "trial": 0,
+      "sim_id": "d868def2-07e3-4ca8-a2b8-991c70029f42",
+      "labels": [
+        {
+          "id": "malformed-tool-call",
+          "decisions": [
+            "D13",
+            "D18",
+            "D6"
+          ]
+        },
+        {
+          "id": "ignored-customer-change",
+          "decisions": [
+            "D15"
+          ]
+        }
+      ],
+      "note": "1. Invented tool names (modify_delivered_order_items, a name with leaked format tokens), 6 duplicate calls, stopped after too many errors.\n2. Exchanged both the bottle and the lamp; the customer wanted only the lamp once asked to confirm.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "7:0": {
+      "task_id": "7",
+      "trial": 0,
+      "sim_id": "9ef45d0c-761b-479e-8e35-d594e31a0afa",
+      "labels": [
+        {
+          "id": "wrong-variant-choice",
+          "decisions": [
+            "D14",
+            "D15"
+          ]
+        }
+      ],
+      "note": "wrong suggestion for lamp, customer already have a medium lamp, and requested for low light, agent should have suggested a low light lamp",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "11:0": {
+      "task_id": "11",
+      "trial": 0,
+      "sim_id": "7e181752-da0c-46e1-8c6a-f98dae4540ba",
+      "labels": [
+        {
+          "id": "attempted-policy-violation",
+          "decisions": [
+            "D16"
+          ]
+        }
+      ],
+      "note": "Passed. The agent tried to refund to a different payment method than the original; the tool rejected it ('Payment method should be the original payment method') and the agent then did it correctly. D16 (rule enforced inside the tool) prevented the violation.\n",
+      "updated_at": "2026-11-02T13:54:00"
+    },
+    "8:0": {
+      "task_id": "8",
+      "trial": 0,
+      "sim_id": "2e7f331e-b103-4ea4-9e8f-1444731119ad",
+      "labels": [
+        {
+          "id": "setup-problem",
+          "decisions": []
+        }
+      ],
+      "note": "Infrastructure error: an Ollama call timed out after 600 s. Not an agent failure; re-run this task later.\n",
+      "updated_at": "2026-11-02T13:54:17"
+    }
+  }
+}

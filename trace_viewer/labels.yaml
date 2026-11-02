@@ -1,0 +1,50 @@
+# Failure labels for your error analysis.
+#
+# Edit this file freely: the viewer re-reads it, so no restart is needed. Each label
+# needs a unique `id`. Saved annotations refer to labels by `id`, so renaming an `id`
+# leaves old annotations pointing at the old name. Changing `name` or `description`
+# is always safe.
+#
+# Which design decisions a label links to by default is set per design, under
+# `label_links` in trace_viewer/designs/<design_version>.yaml.
+
+labels:
+  - id: wrong-variant-choice
+    name: Wrong variant choice
+    description: Picked the wrong product variant, or ignored the customer's conditions.
+
+  - id: misread-tool-output
+    name: Misread tool output
+    description: Misread what a tool returned, for example counted unavailable items.
+
+  - id: incomplete-lookup
+    name: Incomplete lookup
+    description: Gave up or escalated without checking everything.
+
+  - id: malformed-tool-call
+    name: Malformed tool call
+    description: Invented a tool name, used invalid arguments, or repeated a call.
+
+  - id: ignored-customer-change
+    name: Ignored customer change
+    description: Did not follow the customer narrowing or changing the request.
+
+  - id: skipped-identity-check
+    name: Skipped identity check
+    description: Acted before verifying identity.
+
+  - id: unconfirmed-write
+    name: Unconfirmed write
+    description: Changed the database without an explicit yes from the customer.
+
+  - id: setup-problem
+    name: Setup problem
+    description: Caused by infrastructure or the simulated customer, not the agent.
+
+  - id: attempted-policy-violation
+    name: Attempted policy violation
+    description: Tried an action the policy forbids; something else (e.g. the tool) blocked it.
+
+  - id: assumed-customer-detail
+    name: Assumed customer detail
+    description: Filled in something the customer must provide (e.g. payment method) instead of asking.

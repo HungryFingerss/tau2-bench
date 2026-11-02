@@ -1,0 +1,23 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trace Viewer</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#/">Trace Viewer</a>
+      <a class="nav-link" href="#/db">Database</a>
+      <a class="nav-link" href="#/compare">Compare</a>
+      <a class="nav-link" href="#/designs">Designs</a>
+      <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <span id="live-status" class="live-status" role="status">Live</span>
+    </header>
+    <main id="view"></main>
+    <aside id="drawer" class="drawer" role="dialog" aria-label="Raw data" hidden></aside>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

@@ -2,9 +2,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from viewer.api import create_app
-from viewer.store import DEFAULT_SIMULATIONS_DIR, Store
+from viewer.store import DEFAULT_SIMULATIONS_DIR, REPO_ROOT, Store
 
 BASELINE = "baseline-practice-10-v2"
+FDE_AGENT = REPO_ROOT / "fde_agent"
+
+
+def file_states(folder) -> dict:
+    return {path: path.stat().st_mtime_ns for path in folder.rglob("*")}
+
+
+@pytest.fixture(scope="module")
+def fde_agent_untouched():
+    """Fails the module if its tests added or changed any file in fde_agent/."""
+    before = file_states(FDE_AGENT) if FDE_AGENT.is_dir() else None
+    yield
+    if before is not None:
+        assert file_states(FDE_AGENT) == before, "these tests changed fde_agent/"
 
 
 @pytest.fixture(scope="session")

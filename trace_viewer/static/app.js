@@ -17,6 +17,8 @@ import { linked, loadIds, setLinking } from "./ids.js";
 import { labelsPanel, whatsBreaking } from "./labels.js";
 import { watch } from "./live.js";
 import { differencePanel, showDifference } from "./replay.js";
+import "./theme.js";
+import { renderTools } from "./tools.js";
 import {
   CHECK_LABELS,
   api,
@@ -1205,6 +1207,8 @@ async function route() {
       await renderExplorer(view, tab, params.get("q") ?? "", setCrumbs);
     } else if (parts[0] === "designs") {
       await renderDesigns(view, params.get("a") || null, params.get("b") || null, setCrumbs);
+    } else if (parts[0] === "tools") {
+      await renderTools(view, setCrumbs);
     } else if (parts[0] === "compare") {
       const [a, b] = [params.get("a") || null, params.get("b") || null];
       const render = () => renderCompare(view, a, b, setCrumbs);

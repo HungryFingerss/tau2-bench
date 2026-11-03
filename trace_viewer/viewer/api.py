@@ -1,4 +1,5 @@
-"""HTTP routes. Saving an annotation is the only write, and it never touches run data."""
+"""HTTP routes. Saving an annotation is the only write to disk, and it never touches
+run data. Tool sessions write to an in-memory database inside the tools worker."""
 
 from pathlib import Path
 from urllib.parse import urlparse
@@ -6,7 +7,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from viewer import insight, pages
@@ -14,9 +15,11 @@ from viewer.annotations import Annotations, InvalidAnnotation, LabelsFileError
 from viewer.changes import Changes
 from viewer.database import DEFAULT_PAGE_SIZE, Database, UnknownRecord
 from viewer.designs import Designs, UnknownDesign
+from viewer.fde_tests import SuiteRunner
 from viewer.pages import NotFound
 from viewer.replay import Replayer
 from viewer.store import Store, UnknownRun
+from viewer.tools import MAX_SESSION_STEPS, SessionStep, ToolRunner, load_presets
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
@@ -32,16 +35,25 @@ class AnnotationInput(BaseModel):
     note: str = ""
 
 
+class SessionInput(BaseModel):
+    steps: list[SessionStep] = Field(default_factory=list, max_length=MAX_SESSION_STEPS)
+
+
 def create_app(
     simulations_dir: Path | None = None,
     replayer: Replayer | None = None,
     database: Database | None = None,
     designs: Designs | None = None,
     notes: Annotations | None = None,
+    tools: ToolRunner | None = None,
+    tests: SuiteRunner | None = None,
+    presets_file: Path | None = None,
 ) -> FastAPI:
     store = Store(simulations_dir)
     replayer = replayer or Replayer()
     database = database or Database()
+    tools = tools or ToolRunner()
+    tests = tests or SuiteRunner()
     ctx = insight.Context(store, designs or Designs(), notes or Annotations())
     changes = Changes(store)
     app = FastAPI(title="Trace Viewer", docs_url=None, redoc_url=None, openapi_url=None)
@@ -185,6 +197,26 @@ def create_app(
     @app.get("/api/db/{kind}/{record_id}")
     def db_record(kind: str, record_id: str) -> dict:
         return database.record(kind, record_id)
+
+    @app.get("/api/tools")
+    def tool_catalog() -> dict:
+        return tools.catalog()
+
+    @app.get("/api/tools/clear-yes")
+    def tool_clear_yes(text: str = "") -> dict:
+        return tools.clear_yes(text)
+
+    @app.post("/api/tools/session")
+    def tool_session(body: SessionInput) -> dict:
+        return tools.run_session([step.model_dump() for step in body.steps])
+
+    @app.get("/api/tools/presets")
+    def tool_presets() -> dict:
+        return load_presets(presets_file) if presets_file else load_presets()
+
+    @app.post("/api/tools/tests")
+    def run_fde_tests() -> dict:
+        return tests.run()
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

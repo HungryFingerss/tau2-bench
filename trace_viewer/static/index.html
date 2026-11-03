@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Trace Viewer</title>
     <link rel="icon" href="data:," />
+    <script>
+      // Pick the theme before anything paints: the saved choice, else the system's.
+      // static/theme.js keeps it up to date after that.
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem("trace-viewer-theme");
+        } catch (error) {}
+        if (theme !== "dark" && theme !== "light") {
+          theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -13,8 +27,10 @@
       <a class="nav-link" href="#/db">Database</a>
       <a class="nav-link" href="#/compare">Compare</a>
       <a class="nav-link" href="#/designs">Designs</a>
+      <a class="nav-link" href="#/tools">Tools</a>
       <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
       <span id="live-status" class="live-status" role="status">Live</span>
+      <button id="theme-toggle" class="theme-toggle" type="button"></button>
     </header>
     <main id="view"></main>
     <aside id="drawer" class="drawer" role="dialog" aria-label="Raw data" hidden></aside>

@@ -11,6 +11,7 @@ and is not copied here.
 | Read | What it is |
 |---|---|
 | [`trace_viewer/MY_WORK.md`](trace_viewer/MY_WORK.md) | Exactly what I did, step by step, and what I found |
+| [`fde_agent/`](fde_agent/) | My own agent, being built from scratch. Done: its 7 tools and 121 tests, plus a Tools page in the trace viewer to run them by hand. See MY_WORK.md, section 6 |
 | [`trace_viewer/STUDY.md`](trace_viewer/STUDY.md) | The study design: setup, rules, metrics, results so far, limitations |
 | [`trace_viewer/README.md`](trace_viewer/README.md) | How to run the trace viewer |
 | [`runs/baseline-practice-10-v2/`](runs/baseline-practice-10-v2/) | The raw baseline run (all conversations and raw model calls) |
@@ -18,6 +19,8 @@ and is not copied here.
 | [`benchmark-changes/`](benchmark-changes/) | The only two changes I made to the benchmark, and why |
 
 ![Runs](trace_viewer/docs/runs.png)
+
+![Tools page: running my agent's tools by hand](trace_viewer/docs/tools.png)
 
 ## Use it
 
@@ -32,6 +35,8 @@ and is not copied here.
 3. To browse my baseline run, copy `runs/baseline-practice-10-v2/` into `tau2-bench/data/simulations/`.
 4. Start the viewer from the `tau2-bench` folder (Windows): `.\trace_viewer\start.cmd`
 5. To reproduce my runs with local judges, apply `benchmark-changes/local-judges.patch` (see its README).
+6. To run my agent's tool tests, copy `fde_agent/` into the `tau2-bench` folder, then:
+   `uv run --with pytest python -m pytest fde_agent/tests -v`
 
 ## Credit
 

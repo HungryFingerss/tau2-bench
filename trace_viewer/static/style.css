@@ -29,34 +29,34 @@
   --mono: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #141517;
-    --surface: #1c1e21;
-    --sunken: #17181b;
-    --text: #e6e6e2;
-    --muted: #a0a5ac;
-    --line: #313438;
-    --link: #79b0ee;
+/* Dark mode. index.html sets data-theme before the page paints: the saved choice
+   from the theme button, or the system's setting. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141517;
+  --surface: #1c1e21;
+  --sunken: #17181b;
+  --text: #e6e6e2;
+  --muted: #a0a5ac;
+  --line: #313438;
+  --link: #79b0ee;
 
-    --pass: #6fd3a0;
-    --pass-bg: #17332a;
-    --fail: #f2968e;
-    --fail-bg: #3d1f1d;
-    --warn: #e6bb68;
-    --warn-bg: #362a14;
-    --infra: #b9a9f2;
-    --infra-bg: #2a2542;
-    --neutral: #a0a5ac;
-    --neutral-bg: #2a2c30;
+  --pass: #6fd3a0;
+  --pass-bg: #17332a;
+  --fail: #f2968e;
+  --fail-bg: #3d1f1d;
+  --warn: #e6bb68;
+  --warn-bg: #362a14;
+  --infra: #b9a9f2;
+  --infra-bg: #2a2542;
+  --neutral: #a0a5ac;
+  --neutral-bg: #2a2c30;
 
-    --customer: #79b0ee;
-    --customer-bg: #1b2a3c;
-    --agent: #6fd3a0;
-    --tool: #e6bb68;
-    --tool-bg: #30270f;
-  }
+  --customer: #79b0ee;
+  --customer-bg: #1b2a3c;
+  --agent: #6fd3a0;
+  --tool: #e6bb68;
+  --tool-bg: #30270f;
 }
 
 * {
@@ -142,6 +142,42 @@ h3 {
   padding: 0 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
+}
+
+.theme-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+@media (max-width: 520px) {
+  .topbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  /* No room for "Live" on a phone. It still shows when the server stops answering. */
+  .live-status:not(.down) {
+    display: none;
+  }
+
+  .theme-toggle {
+    margin-left: auto;
+  }
 }
 
 .brand {
@@ -1222,4 +1258,337 @@ main > section.panel {
   padding: 24px;
   text-align: center;
   color: var(--muted);
+}
+
+/* Tools page */
+
+.page-head .spacer {
+  flex: 1;
+}
+
+.tools-intro {
+  margin: -6px 0 12px;
+}
+
+@media (max-width: 1080px) {
+  .tools-layout > .side {
+    order: 0;
+  }
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.composer:disabled {
+  opacity: 0.6;
+}
+
+.tool-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.tool-pick {
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--link);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.tool-pick:hover {
+  background: var(--sunken);
+}
+
+.tool-pick[aria-pressed="true"] {
+  background: var(--link);
+  border-color: var(--link);
+  color: var(--surface);
+}
+
+.tool-description {
+  max-height: 260px;
+  margin: 4px 0 6px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--sunken);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.form-field {
+  margin-top: 8px;
+}
+
+.form-field label {
+  font-weight: 600;
+}
+
+.text-box {
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+textarea.text-box {
+  resize: vertical;
+}
+
+.json-box {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+
+.number-box {
+  width: 80px;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.examples .caption {
+  margin: 0 4px 0 0;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 10px;
+}
+
+.form-actions .spacer {
+  flex: 1;
+}
+
+.form-actions .caption {
+  margin: 0;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0 14px;
+}
+
+.primary-button {
+  padding: 4px 12px;
+  background: var(--link);
+  border: 1px solid var(--link);
+  border-radius: 4px;
+  color: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary-button:disabled,
+.link-button:disabled {
+  cursor: default;
+}
+
+.inputs {
+  padding: 4px 8px;
+  background: var(--sunken);
+  border-radius: 4px;
+}
+
+.model-sees {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid;
+  border-radius: 4px;
+}
+
+.model-sees.ok {
+  background: var(--pass-bg);
+  border-left-color: var(--pass);
+}
+
+.model-sees.error {
+  background: var(--fail-bg);
+  border-left-color: var(--fail);
+}
+
+.model-sees-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.model-sees.ok .model-sees-label {
+  color: var(--pass);
+}
+
+.model-sees.error .model-sees-label {
+  color: var(--fail);
+}
+
+.call-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.notes dt.changed,
+.notes dd.changed {
+  background: var(--warn-bg);
+}
+
+.notes dd pre {
+  margin: 0;
+}
+
+.notes-table {
+  width: auto;
+}
+
+.notes-table td {
+  padding: 1px 12px 1px 0;
+  border: 0;
+}
+
+.seen-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.prepared-text {
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--sunken);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.db-change {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.db-field {
+  margin-top: 6px;
+}
+
+.db-field-name {
+  font-weight: 600;
+}
+
+.db-field .before,
+.db-field .after {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+.db-side {
+  color: var(--muted);
+  font-family: var(--sans);
+}
+
+.before {
+  color: var(--fail);
+}
+
+.after {
+  color: var(--pass);
+}
+
+.yes-check:empty {
+  display: none;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+/* A floated legend sits in the row instead of on the fieldset's border. */
+.presets legend {
+  float: left;
+  margin: 0 4px 0 0;
+  padding: 0;
+}
+
+.presets:disabled {
+  opacity: 0.6;
+}
+
+.test-counts {
+  margin-bottom: 4px;
+}
+
+.test-failure {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.test-failure p {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.test-output {
+  max-height: 360px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  overflow: auto;
+  background: var(--sunken);
+  border-radius: 4px;
+}
+
+.test-group {
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+
+.test-group > summary {
+  color: var(--text);
+}
+
+.test-list {
+  margin: 4px 0 4px;
+  padding-left: 18px;
+  list-style: none;
+}
+
+.test-list li {
+  padding: 1px 0;
+  overflow-wrap: anywhere;
 }

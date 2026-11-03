@@ -1,0 +1,66 @@
+# Ready-made sessions for the Tools page.
+#
+# Loading a preset replaces the current session with its steps and runs them. Edit
+# this file freely: the page reads it again every time it opens, and a mistake is
+# shown on the page instead of breaking it.
+#
+# Each step is one of:
+#   - tool: <tool name>          the model calls a tool
+#     inputs: {...}              given exactly as written, like a model's call
+#   - show_change: <number>      code shows the prepared change to the customer
+#   - customer_says: <text>      a customer message
+#
+# Quote values YAML would otherwise read as numbers, such as a zip code: "19122".
+
+presets:
+  - name: Verify Yusuf Rossi (zip 19122)
+    description: Name and zip code. Lists his 5 orders.
+    steps:
+      - tool: verify_customer
+        inputs: {first_name: Yusuf, last_name: Rossi, zip: "19122"}
+
+  - name: Blue T-shirt in L
+    description: >-
+      "Large" is refused with the real sizes. In L there is no blue T-shirt, so the
+      closest available ones are listed.
+    steps:
+      - tool: verify_customer
+        inputs: {first_name: Yusuf, last_name: Rossi, zip: "19122"}
+      - tool: find_variants
+        inputs: {product_name: t shirt, options: {color: blue, size: large}}
+      - tool: find_variants
+        inputs: {product_name: t shirt, options: {color: blue, size: L}}
+
+  - name: Keyboard -> clicky
+    description: >-
+      Baseline task 1. The exact clicky keyboard is not available, so the closest
+      clicky ones are listed, and the customer's own keyboard is never offered.
+    steps:
+      - tool: verify_customer
+        inputs: {first_name: Yusuf, last_name: Rossi, zip: "19122"}
+      - tool: get_order
+        inputs: {order_id: "#W2378156"}
+      - tool: find_replacement
+        inputs:
+          order_id: "#W2378156"
+          item_id: item_1151293680
+          changes: {switch type: clicky}
+
+  - name: Cancel + confirm
+    description: >-
+      Prepare, show, a narrowed yes that is refused, a clear yes, the one write, and
+      a second confirm that is already done.
+    steps:
+      - tool: verify_customer
+        inputs: {first_name: Yusuf, last_name: Rossi, zip: "19122"}
+      - tool: prepare_change
+        inputs: {kind: cancel_order, order_id: "#W6247578", reason: no longer needed}
+      - show_change: 1
+      - customer_says: Yes, but only the lamp
+      - tool: confirm_change
+        inputs: {change_number: 1}
+      - customer_says: "Yes."
+      - tool: confirm_change
+        inputs: {change_number: 1}
+      - tool: confirm_change
+        inputs: {change_number: 1}

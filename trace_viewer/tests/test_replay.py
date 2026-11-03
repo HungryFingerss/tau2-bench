@@ -287,7 +287,7 @@ def test_worker_is_handed_data_and_never_a_results_path(monkeypatch, tmp_path):
     ]
     assert json.loads(seen["input"])["simulations"] == [SIM]
     assert seen["env"]["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
-    assert seen["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert seen["env"]["PYTHONPYCACHEPREFIX"] == str(replay.PYCACHE_DIR)
     assert "VIRTUAL_ENV" not in seen["env"]
 
 

@@ -128,6 +128,78 @@ Keep the viewer open in another terminal to watch the run arrive.
   decision is breaking most at the top of the run page.
 - **Automatic checks:** five rules computed on every task, each showing its definition.
 - **Compare:** two runs side by side, with results, checks, labels and design changes.
+- **Tools:** run your agent's tools by hand, playing both the model and the customer.
+- **Light and dark mode:** the button at the top right. Until you pick one, the viewer
+  follows your system's setting. The choice is kept in this browser only.
+
+## Testing your agent's tools
+
+The **Tools** page runs the tools in `fde_agent/tools/` by hand, against the real retail
+store and an in-memory copy of `db.json`. You play both the model and the customer, in
+one session that behaves like one conversation.
+
+- **As the model:** pick a tool. The description and the form come from the module's
+  `DESCRIPTION` and `PARAMETERS`, so you see exactly what the model will see. Strings
+  are text fields, enums are dropdowns, and objects and arrays are JSON boxes.
+  Examples written as `Example: {...}` in a description fill the form in one click.
+- **Each run** shows the text the model would see, green if it worked and red if not,
+  and every store call with its arguments, result, error flag and whether it is a WRITE.
+- **As the agent loop and the customer:** *Show change #N* calls `notes.mark_shown(N)`
+  and shows the prepared summary as the agent's message. *Customer says* calls
+  `notes.customer_said(text)`, and shows as you type whether
+  `confirm_change.is_clear_yes` would accept it. After a successful transfer, the agent's
+  message is `TRANSFER_MESSAGE`.
+- **Notes** are shown after the latest step, or after any step with *Notes after this*.
+  Fields that step changed are highlighted.
+- **Database changes** list every field the session changed, compared with `db.json`.
+  ID links open records as they are in `db.json`, not as the session changed them.
+- **Undo last step** replays the session without its last step. **Reset session** starts
+  again from a fresh database and empty notes.
+- **Presets** load a whole ready-made session in one click, replacing the current one:
+  *Verify Yusuf Rossi (zip 19122)*, *Blue T-shirt in L*, *Keyboard -> clicky* and
+  *Cancel + confirm*.
+- **Run fde_agent tests** runs `fde_agent/tests` and lists every test as passed,
+  failed, error or skipped. Failures come first, with the assertion, the traceback and
+  anything the test printed. The full pytest output is in its own tab.
+
+### Presets
+
+Presets live in `trace_viewer/tool_presets.yaml`. Edit it freely: the page reads it
+again each time it opens, and a mistake shows on the page with the preset and step it
+is in. A step is one of these:
+
+```yaml
+- tool: get_order               # the model calls a tool
+  inputs: {order_id: "#W2378156"}
+- show_change: 1                # code shows the prepared change to the customer
+- customer_says: "Yes."         # a customer message
+```
+
+Quote values that YAML would read as something else: a zip code such as `"19122"`
+would become a number, and a bare `Yes` would become `true`.
+
+### Running fde_agent's tests
+
+The button runs the command that works on Windows, from the repo root:
+
+```powershell
+uv run --with pytest python -m pytest fde_agent/tests -q
+```
+
+It adds three options: a JUnit XML report, which gives each test's result; the
+captured output of failing tests; and no pytest cache. Bytecode goes to the viewer's
+cache, so a run adds nothing to `fde_agent/`. A run takes about 10 seconds.
+
+The page keeps the session as a list of steps and sends all of them with every action.
+`tools_worker.py` starts under the benchmark's `.venv`, builds a fresh environment with
+`get_environment()` and fresh `Notes`, and replays every step with `store.run_now`.
+Nothing carries over between actions, so what you see always follows from the steps.
+`db.json` is never written, and the worker checks its hash before and after to prove it.
+
+Each action takes about 4 seconds, nearly all of it spent importing tau2. The first one
+after a fresh install takes about 15 seconds, while Python compiles the benchmark's
+packages into `trace_viewer/.cache/pycache`. Nothing is written into `fde_agent/` or
+`src/`. A session survives reloading the page, but not closing the tab.
 
 ## Starting a recorded run
 
@@ -334,7 +406,11 @@ uv run --project trace_viewer pytest trace_viewer/tests
 
 Tests check the viewer's numbers against `baseline-practice-10-v2`, and replay it
 through the benchmark's evaluator. That folder is gitignored, so those tests skip if it
-is missing. Replay tests also skip if the benchmark's `.venv` is missing.
+is missing. Replay tests also skip if the benchmark's `.venv` is missing. Tools tests
+run your tools against the real database, and skip if `fde_agent/` or that `.venv` is
+missing. They also fail if anything in `fde_agent/` changed while they ran. Tests of the
+*Run fde_agent tests* button use a small throwaway suite, so they do not depend on
+whether `fde_agent`'s own tests pass today.
 
 `tests/stress_live_save.py` is a manual check that takes about four minutes. It runs
 the benchmark's save pattern against the real reader and reports any lost save.
@@ -344,8 +420,11 @@ the benchmark's save pattern against the real reader and reports any lost save.
 ```
 start.cmd, main.py   entry point, bound to 127.0.0.1:8765
 record_run.cmd, .py  starts a recorded benchmark run
-replay_worker.py     runs under the benchmark's .venv; the only file importing tau2
+replay_worker.py     replays a simulation under the benchmark's .venv
+tools_worker.py      runs fde_agent's tools under the benchmark's .venv
+                     (these two workers are the only files importing tau2)
 labels.yaml          the failure labels
+tool_presets.yaml    ready-made sessions for the Tools page
 designs/             one file per agent design
 annotations/         your saved labels, one file per run
 docs/                screenshots for this README
@@ -355,7 +434,9 @@ viewer/
   timeline.py        messages to timeline steps
   artifacts.py       attempts, raw calls, step matching, task.log
   database.py        db.json browsing and search
-  replay.py          starts the worker, caches results
+  replay.py          starts the replay worker, caches results
+  tools.py           starts the tools worker, loads the presets
+  fde_tests.py       runs fde_agent's tests and reads each result
   dbdiff.py          field-by-field comparison
   checks.py          the automatic checks and their definitions
   designs.py         load, verify and compare design files

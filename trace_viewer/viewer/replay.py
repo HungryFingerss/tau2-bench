@@ -20,6 +20,7 @@ from viewer.store import REPO_ROOT
 VIEWER_DIR = Path(__file__).resolve().parents[1]
 WORKER = VIEWER_DIR / "replay_worker.py"
 CACHE_DIR = VIEWER_DIR / ".cache" / "replay"
+PYCACHE_DIR = VIEWER_DIR / ".cache" / "pycache"
 CACHE_VERSION = 1
 TIMEOUT_SECONDS = 120
 SUPPORTED_DOMAIN = "retail"
@@ -40,6 +41,23 @@ def benchmark_python() -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+def worker_environment() -> dict[str, str]:
+    """Environment variables for a worker under the benchmark's .venv.
+
+    Compiled bytecode goes to the viewer's cache, never next to the benchmark's or
+    fde_agent's code. Not writing bytecode at all would avoid that too, but then
+    every worker compiles litellm again: 6.6 s instead of 4 s per start.
+    """
+    environment = {
+        **os.environ,
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True",  # Otherwise it fetches prices.
+        "PYTHONPYCACHEPREFIX": str(PYCACHE_DIR),
+    }
+    environment.pop("VIRTUAL_ENV", None)
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    return environment
 
 
 def uses_canonical_retail_db(info: dict) -> bool:
@@ -117,12 +135,6 @@ class Replayer:
             return self._failure(
                 payload, "The benchmark's .venv was not found. Run `uv sync` first."
             )
-        environment = {
-            **os.environ,
-            "LITELLM_LOCAL_MODEL_COST_MAP": "True",  # Otherwise it fetches prices.
-            "PYTHONDONTWRITEBYTECODE": "1",  # Leaves nothing under src/tau2.
-        }
-        environment.pop("VIRTUAL_ENV", None)
         try:
             finished = subprocess.run(
                 [str(python), str(WORKER)],
@@ -132,7 +144,7 @@ class Replayer:
                 encoding="utf-8",
                 errors="replace",
                 cwd=REPO_ROOT,
-                env=environment,
+                env=worker_environment(),
                 timeout=TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:

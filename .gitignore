@@ -1,3 +1,16 @@
+# This folder is my main working folder: a full copy of tau2-bench (Sierra Research)
+# plus my own work. Only my own work goes to GitHub, so this file is a WHITELIST:
+# ignore everything at the top level, then allow only my folders and files.
+# A new top-level file or folder of mine must be added below with a "!" line.
+/*
+!/.gitignore
+!/README.md
+!/fde_agent/
+!/trace_viewer/
+!/runs/
+!/benchmark-changes/
+
+# Never pushed, even inside my folders
 .venv/
 __pycache__/
 .cache/

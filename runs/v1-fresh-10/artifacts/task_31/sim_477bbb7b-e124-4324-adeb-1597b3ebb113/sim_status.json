@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "reason": "infrastructure_error",
+  "error": "The model failed 3 times: APIConnectionError: litellm.APIConnectionError: Ollama_chatException - litellm.Timeout: Connection timed out after 600.0 seconds.",
+  "error_type": "ModelUnavailable"
+}

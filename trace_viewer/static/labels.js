@@ -2,8 +2,14 @@
 
 import { el, enc, plural, post, runLink, taskChips } from "./util.js";
 
+// "addresses D3, D14": the baseline decisions a decision replaces, if its design says.
+function addressesText(decision) {
+  return decision?.addresses?.length ? ` (addresses ${decision.addresses.join(", ")})` : "";
+}
+
 function decisionName(page, id) {
-  return page.design_decisions.find((d) => d.id === id)?.name ?? "Not in this run's design";
+  const decision = page.design_decisions.find((d) => d.id === id);
+  return decision ? `${decision.name}${addressesText(decision)}` : "Not in this run's design";
 }
 
 // The label editor. Suggestions never apply themselves: a click confirms each one.
@@ -75,7 +81,7 @@ export function labelsPanel(page) {
             },
           },
           el("option", { value: "", text: "Link a decision" }),
-          available.map((d) => el("option", { value: d.id, text: `${d.id}: ${d.name}` })),
+          available.map((d) => el("option", { value: d.id, text: `${d.id}: ${d.name}${addressesText(d)}` })),
         ),
     );
   };
@@ -237,6 +243,7 @@ export function whatsBreaking(page, run) {
       {},
       el("a", { href: design ? href : undefined, text: bucket.id }),
       ` ${bucket.name}`,
+      bucket.addresses?.length > 0 && el("span", { class: "subtle small", text: addressesText(bucket) }),
       bucket.status === "not_handled" && el("span", { class: "chip plain not-handled", text: "not handled" }),
     );
   };

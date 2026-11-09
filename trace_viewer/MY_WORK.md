@@ -10,11 +10,11 @@ analysis. The trace viewer's code was written by Claude Code from my specificati
 as a reviewer to check the viewer's numbers independently and to challenge my labels; where it
 corrected me, that is written down below.
 
-For my own agent ([`../fde_agent/`](../fde_agent/), section 6), the code was written by Claude in a
-step-by-step session: for each tool we agreed a spec first, then it wrote the code and explained it
-piece by piece, then the tests. I made the design decisions (listed in section 6, including the
-ones that came from me and the one where I went against Claude's recommendation), reviewed each
-file, and ran all the tests on my own machine.
+For my own agent ([`../fde_agent/`](../fde_agent/), sections 6–8), the code was written by Claude
+in a step-by-step session: for each piece we agreed a spec first, then it wrote the code and
+explained it, then the tests. I made the design decisions (the ones that came from me are marked,
+including the one where I went against Claude's recommendation), reviewed the code, ran the tests
+and every benchmark run on my own machine, and decided when to stop.
 
 ## Why
 
@@ -262,11 +262,153 @@ One side effect: `record_run` saves the agent's code with each run using `git di
 benchmark's code is now ignored by git, so that diff is empty for the old baseline agent. My own
 agent lives in `fde_agent/`, which git tracks, so its design file will point there.
 
-## 7. Next
+## 7. The agent loop (4–6 Nov 2026)
 
-1. Test every tool by hand on the Tools page, beyond the presets.
-2. The agent loop: the model's instructions, turning its tool calls into my tools, sending the
-   summaries and the transfer sentence word for word, recording the customer's replies for the
-   yes rule, and connecting it all to the benchmark.
-3. The same 10 practice tasks against the baseline (3 of 9), watching for malformed
-   `prepare_change` calls and for the yes rule refusing real yeses.
+With the tools done, the rest of the agent was built the same way: one piece at a time, spec
+first, then code, then tests without a model.
+
+| Piece | What it does |
+|---|---|
+| Driver (`driver.py`) | Runs the conversation: asks the model what to do, runs our tools, passes their store calls through the benchmark, keeps a transcript and a full log |
+| Model client (`model_client.py`) | Calls the model and checks every reply **before** anything runs: unknown or empty tool names, bad inputs, text and a tool call in one reply, several calls, broken JSON. Rejected replies go back to the model as an error; small slips (junk on a tool name, a number sent as text) are fixed and logged |
+| Instructions (`instructions.md`) | 477 words of my own, plus a table that points every rule sentence in the store's policy to the code or the instruction line that covers it |
+| Loop rules | Code sends the change summary word for word, code sends the transfer sentence, replies that show internal IDs are not sent |
+| Benchmark adapter (`agent.py`, `run.py`) | Plugs the driver into τ²-bench and writes `fde_agent_log.json` next to each conversation, so the trace viewer shows every internal step: who wrote each message (model, code or benchmark), every check that fired, and every raw model call |
+
+**A decision against measuring each fix alone.** I had planned switches to turn each fix off and
+rerun, to see what each one was worth. I skipped them: this agent is a practice project built
+around one model, and each run takes hours on my laptop. Results below are for the whole design.
+My next agent will have switches built in from day one.
+
+**Before any benchmark run:** 16 of 18 live test scenarios passed with the real model (6 scenarios,
+3 runs each). The same test can pass one day and fail the next even at temperature 0: local Ollama
+isn't fully repeatable, so I report pass rates over repeated runs, not single results.
+
+## 8. Runs, failures and fixes (6–9 Nov 2026)
+
+Each round: run, read every failed conversation in the viewer, decide whose fault it was (my agent
+or the simulated customer), fix the agent's faults in code, test the fix offline by replaying the
+exact moment from the run, then run again. All runs are in [`../runs/`](../runs/).
+
+### Round 1: the first runs
+
+**Smoke runs on task 0.** The second one failed in an instructive way: my summary asked two
+questions ("Is there any other item you want to exchange?" and "Shall I go ahead?"). The customer
+answered both: *"I don't have any other items… go ahead"*. My strict yes rule saw "don't" and
+refused it, the agent asked again, and the customer left before anything was saved.
+- **Fix (my design):** a second check. When the code's rule says no, a model with **no
+  conversation** reads only the summary and the reply and answers YES or NO. When the rule says
+  yes, the model is never asked. Live test: 27 of 27 replies judged correctly.
+- Summaries ask one question only.
+
+**Practice run (`v1-practice-10`): 3 of 9**, the same as the baseline but on different tasks. In
+3 of the failures my agent had exactly the right change ready, and the customer said *"Yes, go
+ahead"* and ended the chat **in the same message**. The baseline's customer, the same model, did
+that 0 times in 9; mine did it 4 times. The cause was on my side: my summary read like a finished
+change (*"You get $16.63 back. You'll get an email…"*). The baseline asked *"Reply yes and I'll
+start the exchange."* Two of the failures were plain agent mistakes (preparing a new change after
+the customer said yes, which threw the yes away).
+- **Fixes:** the summary starts with *"Nothing has changed yet"* and ends with *"I'll make the change as
+  soon as you say yes"*; no new change can be prepared while a yes is waiting; code reminds the
+  model when a change is still waiting.
+
+### Round 2: practice rerun and the first unseen tasks
+
+| Run | Result |
+|---|---|
+| `v1-practice-10-b` (same tasks, after the fixes) | **6 of 9** (customer "yes + leave" dropped from 4 to 1) |
+| `v1-unseen-10` (10 train tasks my fixes had never seen) | **6 of 10** |
+
+The practice score flatters me, because the fixes came from those tasks. The unseen score is the
+honest one. Both runs showed new problems, and two of them are worse than a failed task:
+- The customer said *"Yes."*, the model skipped the confirm step and told the customer *"Your return
+  has been requested"*. Nothing was returned.
+- Before the customer gave any details, the model looked up *"John Doe, zip 90210"*.
+- *"Yeah, looks right. Go ahead and use my gift card"* passed the yes rule; the change was made on
+  PayPal, and the model then said it was "covered by your gift card".
+
+### Round 3: eight more fixes, then a fix to the fixes
+
+| Fix | What it does |
+|---|---|
+| A waiting yes comes first | While the customer's yes waits, only `confirm_change` may run: no other tool, no message |
+| Payment in a yes | A yes that names another payment method is not a plain yes |
+| Code says "done" | After a change is made, code tells the customer what the store actually did |
+| No invented customers | A name, zip or email the customer never said can't be used for a lookup |
+| Same product elsewhere | The model is told which other orders have the same product ("change **all** my t-shirts") |
+| Cheap re-verify | Verifying the same customer again reloads nothing |
+| **Clean history (my idea)** | Once the model recovers, it stops seeing its own failed steps. Errors that state a fact about the store are kept as a short note. Every tool error is marked as a fact or a usage error (62 errors, 18 facts) |
+| **No identical calls (my idea)** | A call with exactly the same inputs as an earlier successful one isn't run; the model is pointed to that result |
+
+**The smoke test caught a bug in my own fix.** The customer said *"Just go ahead with the desk
+lamp"* to a summary with a lamp and a water bottle. The yes rule read a yes. The model was right:
+it asked "just the lamp?" and prepared the lamp-only change. But the new "a waiting yes comes first"
+rule blocked both and forced the confirm. Both items were exchanged.
+- **Lesson:** a word rule can't understand "just the lamp". The more power I gave it, the more its
+  misreads cost.
+- **Fix:** the rule now accepts only plain yeses ("Yes, go ahead"). Anything that says "just" or
+  names an item goes to the second-check model. And when the rule and the model disagree, that
+  model decides. The same smoke test then passed.
+
+In total the agent has 27 named design decisions (F1–F27) in
+[`designs/v1-fde-agent.yaml`](designs/v1-fde-agent.yaml), each linked to its source lines and to the
+baseline decision it replaces. 263 tests run without a model (each fix replays the real moment
+from a run, and I broke each fix on purpose to check its test catches it), plus 17 live tests with
+the real model.
+
+## 9. Results
+
+Same agent model (`gpt-oss:20b`), customer model (`gemma4:12b`), judge, seed and limits in every
+run; 1 trial per task.
+
+| Tasks | Baseline | My agent |
+|---|---|---|
+| Practice 10 (`0 1 2 3 4 6 7 8 10 11`) | 3 of 9 | round 1: 3 of 9 → round 2: **6 of 9** (in-sample) |
+| Unseen 10 (`13 14 15 16 19 20 21 22 23 24`) | not run | round 2: **6 of 10** |
+| Fresh 10 (`25 28 29 30 31 34 35 37 41 43`) | 1 of 5 scored | round 3: 3 of 6 scored |
+| Fresh 10, tasks scored in **both** runs (25, 28, 30, 37) | 1 of 4 | **2 of 4** |
+
+**Read these carefully.** The samples are small, every task ran once, and local models aren't
+repeatable, so a single task can flip by luck. The fresh run is the cleanest test of the final
+design, and it is also the smallest.
+
+### The real bottleneck: the simulated customer
+
+The customer in τ²-bench is also an AI model, here running on my laptop. In the fresh runs it
+froze and timed out (600 s) again and again, sometimes on its very first message, before any agent
+had said a word:
+- Baseline: 23 of its 24 failed attempts were the customer; 5 of the 10 tasks couldn't be scored.
+- My agent: 21 of 22 failed attempts were the customer; 4 of the 10 tasks couldn't be scored.
+- The two fresh runs took 10.5 and 12.4 hours.
+
+So which tasks get scored at all came down to the customer model, and most of the time went to
+waiting for it.
+
+## 10. Why I'm stopping here
+
+Every round taught me something real, but each round now costs a day of laptop time, and the
+customer model decides more of the result than my agent does. Swapping the customer model would
+mean re-running every baseline to keep the comparison fair. That is time better spent on new
+problems. This was a practice project to learn the process, and it did that.
+
+**What I'm taking to the next project:**
+1. **Code-enforced rules beat prompt rules, but a rule is only as good as its reading of
+   language.** My yes rule refused real yeses and accepted narrowed ones. Give a rule power only in
+   proportion to how well it reads; hand ambiguous cases to an independent check.
+2. **Wording is part of the system.** A summary that sounded finished made customers leave before
+   the change was made (4 times vs 0).
+3. **Read the traces, not the score.** Several failures I first blamed on the customer were mine,
+   and the other way round.
+4. **Fixes found on some tasks flatter those tasks.** Always measure again on tasks you haven't
+   looked at.
+5. **Choose the evaluation setup before building.** Slow local models decided what I could
+   measure. Next time: API models, and switches to turn each fix off from day one.
+
+**Left open:**
+- When the customer asks for an option that doesn't exist ("Google Home"), the agent picks the
+  closest one ("Google Assistant") without saying so.
+- "The most expensive variant, but in size 9" is still beyond the model.
+- If a customer says "Yes, and also change the address" to an item change on a pending order, the
+  items are confirmed first, and the address can't change afterwards.
+- The trace viewer shows the round-3 check events as plain "other" steps.
+- The 40 held-out test tasks were never used: I stopped before a final test run.

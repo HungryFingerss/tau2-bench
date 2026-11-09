@@ -203,6 +203,7 @@ def analysis(
                     "id": decision_id,
                     "name": known.get("name") or "Not in this run's design",
                     "status": known.get("status"),
+                    "addresses": known.get("addresses") or [],
                 },
             )
             decision[side].append(_task_ref(row))

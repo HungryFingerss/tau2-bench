@@ -1,0 +1,88 @@
+{
+  "run": "v1-practice-10",
+  "sessions": [
+    {
+      "started_at": "2026-11-07T09:21:01",
+      "finished_at": "2026-11-07T15:43:08",
+      "exit_code": 0,
+      "note": "practice 10: same tasks and settings as baseline-practice-10-v2",
+      "design_version": "v1-fde-agent",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "fde_agent.run",
+        "run",
+        "--domain",
+        "retail",
+        "--task-split-name",
+        "train",
+        "--task-ids",
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "6",
+        "7",
+        "8",
+        "10",
+        "11",
+        "--agent",
+        "fde_agent",
+        "--agent-llm",
+        "ollama_chat/gpt-oss:20b",
+        "--user-llm",
+        "ollama_chat/gemma4:12b",
+        "--verbose-logs",
+        "--llm-log-mode",
+        "all",
+        "--save-to",
+        "v1-practice-10"
+      ],
+      "command_line": "uv run python -m fde_agent.run run --domain retail --task-split-name train --task-ids 0 1 2 3 4 6 7 8 10 11 --agent fde_agent --agent-llm ollama_chat/gpt-oss:20b --user-llm ollama_chat/gemma4:12b --verbose-logs --llm-log-mode all --save-to v1-practice-10",
+      "git": {
+        "commit": "321c4af5786ec5b3bddeaef2d14f0840905fb06a",
+        "branch": "main",
+        "code_paths": [
+          "fde_agent/"
+        ],
+        "changed_files": [
+          "fde_agent/tests/conftest.py",
+          "fde_agent/tests/test_confirm_change.py",
+          "fde_agent/tests/test_prepare_change.py",
+          "fde_agent/tools/confirm_change.py",
+          "fde_agent/tools/prepare_change.py"
+        ],
+        "untracked_files": [
+          "fde_agent/LOG_FORMAT.md",
+          "fde_agent/agent.py",
+          "fde_agent/driver.py",
+          "fde_agent/instructions.md",
+          "fde_agent/model_client.py",
+          "fde_agent/outgoing.py",
+          "fde_agent/policy_coverage.py",
+          "fde_agent/prompt.py",
+          "fde_agent/run.py",
+          "fde_agent/tests/test_agent.py",
+          "fde_agent/tests/test_choices_and_inputs.py",
+          "fde_agent/tests/test_driver.py",
+          "fde_agent/tests/test_instructions.py",
+          "fde_agent/tests/test_loop_rules.py",
+          "fde_agent/tests/test_model_client.py",
+          "fde_agent/tests/test_model_live.py",
+          "fde_agent/tests/test_yes_check.py",
+          "fde_agent/tests/test_yes_check_live.py",
+          "fde_agent/toolset.py",
+          "fde_agent/yes_check.py"
+        ],
+        "diff_file": "agent_code.diff"
+      },
+      "judges": {
+        "nl": "ollama_chat/gemma4:12b",
+        "communicate": "ollama_chat/gemma4:12b"
+      }
+    }
+  ]
+}

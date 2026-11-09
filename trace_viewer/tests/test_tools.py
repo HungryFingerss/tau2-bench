@@ -192,7 +192,8 @@ def test_show_sends_the_prepared_summary(checklist):
         step["agent_message"]
         == checklist["steps"][4]["notes"]["prepared"]["customer_text"]
     )
-    assert step["agent_message"].startswith("Cancel order #W6247578")
+    assert step["agent_message"].startswith(
+        "Here's the change I'll make. Nothing has changed yet.\nCancel order #W6247578")
     assert step["notes"]["shown"] == 1
 
 

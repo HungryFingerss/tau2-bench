@@ -195,7 +195,7 @@ def test_artifact_scan_counts_unfinished_work(tmp_path):
 
 def test_artifact_scan_of_a_run_with_no_artifacts(tmp_path):
     scan = runmeta.scan_artifacts(make_run(tmp_path, "run"))
-    assert scan == (0, 0, 0, None)
+    assert scan == (0, 0, 0, None, ())
 
 
 def test_summary_of_a_recorded_run():

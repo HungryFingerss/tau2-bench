@@ -1,5 +1,6 @@
 // Compare two runs, task by task.
 
+import { compareTotals } from "./agentcounts.js";
 import { SHORT_NAMES } from "./checks.js";
 import { designDifference } from "./design.js";
 import { api, chip, el, enc, formatDate, runLink, selectRun, taskLink } from "./util.js";
@@ -21,9 +22,22 @@ function flagged(checks) {
     .map(([id, check]) => (check.count > 1 ? `${SHORT_NAMES[id]} ${check.count}` : SHORT_NAMES[id]));
 }
 
+// CHECK events from the agent's own log, as "invalid_call 2".
+function fired(agentChecks) {
+  return Object.entries(agentChecks ?? {})
+    .filter(([, count]) => count)
+    .map(([kind, count]) => `${kind} ${count}`);
+}
+
+function callsAndSteps(side) {
+  if (side.model_calls === undefined || side.model_calls === null) return "";
+  const mark = side.in_results === false ? " *" : "";
+  return `${side.model_calls} / ${side.benchmark_steps}${mark}`;
+}
+
 function sideCells(run, row, side) {
   if (!side) {
-    return [el("td", { class: "subtle", text: "not in this run" }), el("td"), el("td")];
+    return [el("td", { class: "subtle", text: "not in this run" }), el("td"), el("td"), el("td")];
   }
   return [
     el(
@@ -31,7 +45,12 @@ function sideCells(run, row, side) {
       {},
       el("a", { href: taskLink(run, row.task_id, row.trial), "aria-label": `Task ${row.task_id} in ${run}` }, chip(side.result)),
     ),
-    el("td", { class: "small", text: flagged(side.checks).join(", ") }),
+    el("td", {
+      class: "num nowrap",
+      title: side.in_results === false ? "Counted from an attempt's log: results.json does not hold it yet." : "Agent model calls / benchmark steps",
+      text: callsAndSteps(side),
+    }),
+    el("td", { class: "small", text: [...flagged(side.checks), ...fired(side.agent_checks)].join(", ") }),
     el("td", { class: "small", text: side.labels.join(", ") }),
   ];
 }
@@ -50,8 +69,11 @@ function runHeader(side, title) {
       { class: "kv" },
       el("dt", { text: "Pass rate" }),
       el("dd", { text: rate }),
+      el("dt", { text: "Agent" }),
+      el("dd", { class: "mono", text: side.agent ?? "unknown" }),
       el("dt", { text: "Design" }),
       el("dd", { class: "mono", text: `${side.design ?? "unknown"}${side.design_origin === "assumed" ? " (assumed)" : ""}` }),
+      compareTotals(side),
       el("dt", { text: "Date" }),
       el("dd", { text: formatDate(side.date) }),
       side.note && el("dt", { text: "Note" }),
@@ -150,7 +172,13 @@ export async function renderCompare(view, first, second, setCrumbs) {
           el(
             "tr",
             {},
-            ["Task", "Change", "First", "Checks", "Labels", "Second", "Checks", "Labels"].map((text) => el("th", { text })),
+            ["Task", "Change", "First", "Calls / steps", "Checks", "Labels", "Second", "Calls / steps", "Checks", "Labels"].map((text) =>
+              el("th", {
+                class: text === "Calls / steps" ? "help num" : undefined,
+                title: text === "Calls / steps" ? "Agent model calls / benchmark steps. * means counted from an attempt's log that results.json does not hold yet." : undefined,
+                text,
+              }),
+            ),
           ),
         ),
         body,

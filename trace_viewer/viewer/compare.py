@@ -21,12 +21,17 @@ def change(first: str | None, second: str | None) -> str:
 def _side(row: dict | None) -> dict[str, Any] | None:
     if row is None:
         return None
+    agent = row.get("agent") or {}
     return {
         "result": row["result"],
         "db": row.get("db"),
         "nl": row.get("nl"),
         "checks": row.get("checks"),
         "labels": row.get("labels") or [],
+        "model_calls": agent.get("model_calls"),
+        "benchmark_steps": agent.get("benchmark_steps"),
+        "agent_checks": agent.get("checks"),
+        "in_results": agent.get("in_results"),
     }
 
 

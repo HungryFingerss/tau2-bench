@@ -35,6 +35,9 @@ DECISION_FIELDS = (
 COMPARED_FIELDS = ("name", "status", "what", "code_enforces", "left_to_model")
 STATUSES = ("implemented", "not_handled")
 
+# What record_run.py starts when a design names no entry_point.
+DEFAULT_ENTRY_POINT = ("uv", "run", "tau2", "run")
+
 
 class UnknownDesign(KeyError):
     """No design file has this version."""
@@ -54,6 +57,10 @@ def validate(design: Any, path: Path) -> dict:
         raise DesignError(f"{path.name}: version must be `{path.stem}`.")
     if not (design["applies_to"] or {}).get("agent_implementation"):
         raise DesignError(f"{path.name} needs applies_to.agent_implementation.")
+    if "entry_point" in design and not _is_word_list(design["entry_point"]):
+        raise DesignError(f"{path.name}: entry_point must be a list of words.")
+    if "store_tools_from" in design and not isinstance(design["store_tools_from"], str):
+        raise DesignError(f"{path.name}: store_tools_from names one design.")
 
     seen = set()
     for decision in design["decisions"]:
@@ -65,11 +72,26 @@ def validate(design: Any, path: Path) -> dict:
         seen.add(decision["id"])
         if decision["status"] not in STATUSES:
             raise DesignError(f"{path.name}: bad status on {decision['id']}.")
+        if "addresses" in decision and not isinstance(decision["addresses"], list):
+            raise DesignError(f"{path.name}: addresses on {decision['id']} is a list.")
         for source in decision["source"]:
             first, last = source["lines"]
             if not source.get("file") or first > last:
                 raise DesignError(f"{path.name}: bad source on {decision['id']}.")
     return design
+
+
+def _is_word_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(word, str) and word.strip() for word in value)
+    )
+
+
+def entry_point(design: dict) -> list[str]:
+    """The command that starts a run of this design, before the benchmark's flags."""
+    return list(design.get("entry_point") or DEFAULT_ENTRY_POINT)
 
 
 def load_design(path: Path) -> dict:
@@ -172,6 +194,53 @@ def _tools_by_name(design: dict) -> dict[str, dict]:
     return {tool["name"]: tool for tool in design.get("tools") or []}
 
 
+def _brief(decision: dict) -> dict[str, Any]:
+    return {k: decision.get(k) for k in ("id", "name", "status", "what")}
+
+
+def decision_map(first: dict, second: dict) -> dict[str, Any] | None:
+    """How two designs with different decision ids relate, from `addresses`.
+
+    A design whose decisions say which of another design's decisions they address
+    (v1-fde-agent's F decisions name the baseline's D decisions) can be read against
+    it: each base decision with what replaced it, and the decisions that are new.
+    Works in either order. None when neither design has `addresses`.
+    """
+
+    def has_links(design: dict) -> bool:
+        return any(d.get("addresses") for d in design["decisions"])
+
+    if has_links(second):
+        base, other = first, second
+    elif has_links(first):
+        base, other = second, first
+    else:
+        return None
+    rows = [
+        {
+            **_brief(decision),
+            "replaced_by": [
+                _brief(d)
+                for d in other["decisions"]
+                if decision["id"] in (d.get("addresses") or [])
+            ],
+        }
+        for decision in base["decisions"]
+    ]
+    known = {d["id"] for d in base["decisions"]}
+    return {
+        "base": base["version"],
+        "other": other["version"],
+        "rows": rows,
+        "new": [
+            _brief(d)
+            for d in other["decisions"]
+            if not set(d.get("addresses") or []) & known
+        ],
+        "replaced": sum(1 for row in rows if row["replaced_by"]),
+    }
+
+
 def compare_designs(first: dict, second: dict) -> dict[str, Any]:
     """What changed from one design to another."""
     old = {d["id"]: d for d in first["decisions"]}
@@ -233,8 +302,9 @@ def compare_designs(first: dict, second: dict) -> dict[str, Any]:
             if old_parameters.get(name) != new_parameters.get(name)
         ],
     }
-    result["added"].sort(key=lambda d: d["id"])
-    result["removed"].sort(key=lambda d: d["id"])
+    result["added"].sort(key=lambda d: _id_order(d["id"]))
+    result["removed"].sort(key=lambda d: _id_order(d["id"]))
+    result["mapping"] = decision_map(first, second)
     result["same"] = not any(
         result[key]
         for key in (
@@ -253,19 +323,30 @@ def compare_designs(first: dict, second: dict) -> dict[str, Any]:
     return result
 
 
+def _id_order(decision_id: str) -> tuple:
+    """D2 before D10."""
+    letters = decision_id.rstrip("0123456789")
+    number = decision_id[len(letters) :]
+    return (letters, int(number) if number else 0)
+
+
 def rebuild_prompt(design: dict, info: dict) -> str | None:
     """The prompt the design predicts for a run, from its saved run info.
 
     The policy in results.json leaves out the language line that the benchmark adds
     inside <policy>, so it is taken from the run's language context.
+
+    A design with no template sends its instruction alone, with no policy.
     """
+    prompt = design["system_prompt"]
+    if "template" not in prompt:
+        return prompt.get("instruction")
     policy = (info.get("environment_info") or {}).get("policy")
     if policy is None:
         return None
     contexts = list((info.get("language_tasks") or {}).values())
     clause = contexts[0].get("agent_language_clause") if contexts else None
     domain_policy = f"{policy}\n\n{clause}" if clause else policy
-    prompt = design["system_prompt"]
     return prompt["template"].format(
         agent_instruction=prompt["instruction"], domain_policy=domain_policy
     )

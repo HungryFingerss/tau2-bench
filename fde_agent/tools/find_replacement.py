@@ -54,16 +54,16 @@ IN_ORDER_NOTE = "  (the customer already has this exact item in this order)"
 
 def _check(notes: Notes, order_id: str, item_id: str, changes) -> str:
     if notes.customer is None:
-        raise ToolError("Verify the customer first (verify_customer).")
+        raise ToolError("Verify the customer first (verify_customer).", fact=False)
     if not order_id:
-        raise ToolError("Need the order ID of the item to replace.")
+        raise ToolError("Need the order ID of the item to replace.", fact=False)
     if not notes.is_customers_order(order_id):
         raise ToolError(f"{order_id} is not one of {notes.customer.name}'s orders. "
-                        f"Their orders are: {', '.join(notes.orders)}.")
+                        f"Their orders are: {', '.join(notes.orders)}.", fact=False)
     raw_item = unlabel(ITEM, item_id, notes.seen)  # IdError
     if not isinstance(changes, dict) or not any(str(v).strip() for v in changes.values()):
         raise ToolError('Give the options to change, e.g. {"color": "blue"}. '
-                        'Only what the customer wants different; the rest is kept.')
+                        'Only what the customer wants different; the rest is kept.', fact=False)
     return raw_item
 
 
@@ -78,22 +78,22 @@ def find_replacement(notes: Notes, order_id: str = "", item_id: str = "",
 
     [r] = yield [StoreCall("get_order_details", {"order_id": order_id})]
     if r.error:
-        raise ToolError(f"Could not load order {order_id} ({r.content}).")
+        raise ToolError(f"Could not load order {order_id} ({r.content}).", fact=False)
     order = json.loads(r.content)
-    notes.record_order(order_id, order["status"])
+    notes.record_order(order_id, order["status"], order["items"])
 
     if order["status"] not in ("pending", "delivered"):
         raise ToolError(f"Order {order_id} is '{order['status']}', so its items can't be "
-                        f"changed or exchanged. Possible actions: {possible_actions(order['status'])}")
+                        f"changed or exchanged. Possible actions: {possible_actions(order['status'])}", fact=True)
 
     current = next((it for it in order["items"] if it["item_id"] == current_id), None)
     if current is None:
         theirs = ", ".join(f"{label(ITEM, it['item_id'])} ({it['name']})" for it in order["items"])
-        raise ToolError(f"{label(ITEM, current_id)} is not in order {order_id}. Its items are: {theirs}.")
+        raise ToolError(f"{label(ITEM, current_id)} is not in order {order_id}. Its items are: {theirs}.", fact=False)
 
     [p] = yield [StoreCall("get_product_details", {"product_id": current["product_id"]})]
     if p.error:
-        raise ToolError(f"Could not load the product ({p.content}).")
+        raise ToolError(f"Could not load the product ({p.content}).", fact=False)
     product = json.loads(p.content)
     variants = list(product["variants"].values())
 
@@ -101,7 +101,7 @@ def find_replacement(notes: Notes, order_id: str = "", item_id: str = "",
     target = {**current["options"], **wanted}
     if target == current["options"]:
         raise ToolError(f"That is what the customer already has: {fmt.options(current['options'])}. "
-                        f"Ask what they want different.")
+                        f"Ask what they want different.", fact=True)
 
     others_in_order = {it["item_id"] for it in order["items"]} - {current_id}
     result = pick(variants, current, wanted, target)

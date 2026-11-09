@@ -1,7 +1,7 @@
 // Agent designs: each run's design, the source behind a decision, and design comparison.
 
 import { openDrawer } from "./drawer.js";
-import { api, el, enc, keyValues, plural, pretty, runLink } from "./util.js";
+import { api, el, enc, keyValues, plural, pretty, runLink, taskChips } from "./util.js";
 
 const STATUS_LABELS = { implemented: "Implemented", not_handled: "Not handled" };
 
@@ -76,6 +76,9 @@ function decisionCard(decision, focused) {
       el("dd", { text: decision.code_enforces }),
       el("dt", { text: "Left to the model" }),
       el("dd", { text: decision.left_to_model }),
+      decision.addresses && el("dt", { text: "Addresses" }),
+      decision.addresses &&
+        el("dd", { text: decision.addresses.length ? decision.addresses.join(", ") : "nothing in the baseline: new" }),
     ),
     sourceLinks(decision.source),
   );
@@ -249,14 +252,90 @@ function textChange(label, change) {
   );
 }
 
+function decisionLink(run, decision) {
+  const text = `${decision.id}: ${decision.name}`;
+  return run
+    ? el("a", { href: `${runLink(run)}/design?decision=${enc(decision.id)}`, title: decision.what, text })
+    : el("span", { title: decision.what, text });
+}
+
+// Two designs whose decisions have different ids, read through `addresses`: each
+// base decision beside what replaced it, and, when comparing runs, the failures
+// each run linked to them.
+function mappingTable(mapping) {
+  const withRuns = mapping.base_run !== undefined;
+  const failures = (tasks, run) =>
+    tasks?.length ? taskChips(run, tasks) : el("span", { class: "subtle", text: "none" });
+  const rows = mapping.rows.map((row) =>
+    el(
+      "tr",
+      {},
+      el("td", {}, decisionLink(mapping.base_run, row), " ", statusChip(row.status)),
+      el(
+        "td",
+        {},
+        row.replaced_by.length
+          ? row.replaced_by.map((d, i) => [i ? el("br") : null, decisionLink(mapping.other_run, d)])
+          : el("span", { class: "subtle", text: "nothing: the same as the benchmark does it" }),
+      ),
+      withRuns && el("td", {}, failures(row.base_failures, mapping.base_run)),
+      withRuns && el("td", {}, row.replaced_by.length ? failures(row.other_failures, mapping.other_run) : ""),
+    ),
+  );
+  const newRows = mapping.new.map((d) =>
+    el(
+      "tr",
+      {},
+      el("td", { class: "subtle", text: "(new)" }),
+      el("td", {}, decisionLink(mapping.other_run, d)),
+      withRuns && el("td"),
+      withRuns && el("td", {}, failures(d.other_failures, mapping.other_run)),
+    ),
+  );
+  const heads = [
+    mapping.base,
+    `${mapping.other} decision that addresses it`,
+    ...(withRuns ? [`Failures linked in ${mapping.base_run}`, `Failures linked in ${mapping.other_run}`] : []),
+  ];
+  return changeRow(
+    `How ${mapping.other} relates to ${mapping.base}`,
+    el(
+      "div",
+      {},
+      el("p", {
+        class: "caption",
+        text: `The decision ids differ, so they are matched through each ${mapping.other} decision's "addresses" list. ${mapping.replaced} of ${mapping.rows.length} ${mapping.base} decisions are addressed; ${mapping.new.length} ${mapping.other} decisions are new.${withRuns ? " Failures come from each run's failure labels and the decisions they link." : ""}`,
+      }),
+      el(
+        "div",
+        { class: "table-wrap" },
+        el("table", {}, el("thead", {}, el("tr", {}, heads.map((text) => el("th", { text })))), el("tbody", {}, rows, newRows)),
+      ),
+    ),
+  );
+}
+
 // Used on the design comparison page and when comparing two runs.
 export function designDifference(difference) {
   const parts = [];
   if (difference.same) {
     parts.push(el("p", { class: "subtle", text: "These two designs are identical." }));
   }
-  if (difference.added.length) parts.push(changeRow(`Added (${difference.added.length})`, decisionList(difference.added)));
-  if (difference.removed.length) parts.push(changeRow(`Removed (${difference.removed.length})`, decisionList(difference.removed)));
+  if (difference.mapping) {
+    parts.push(mappingTable(difference.mapping));
+    parts.push(
+      el(
+        "details",
+        { class: "design-change" },
+        el("summary", { text: `Decision lists by id: ${difference.removed.length} only in one, ${difference.added.length} only in the other` }),
+        difference.removed.length > 0 && changeRow(`Only in the first (${difference.removed.length})`, decisionList(difference.removed)),
+        difference.added.length > 0 && changeRow(`Only in the second (${difference.added.length})`, decisionList(difference.added)),
+      ),
+    );
+  } else {
+    if (difference.added.length) parts.push(changeRow(`Added (${difference.added.length})`, decisionList(difference.added)));
+    if (difference.removed.length) parts.push(changeRow(`Removed (${difference.removed.length})`, decisionList(difference.removed)));
+  }
   if (difference.changed.length) {
     parts.push(
       changeRow(

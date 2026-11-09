@@ -1,0 +1,59 @@
+{
+  "run": "baseline-fresh-10",
+  "sessions": [
+    {
+      "started_at": "2026-11-08T13:58:21",
+      "finished_at": "2026-11-09T00:24:19",
+      "exit_code": 0,
+      "note": "baseline on 10 fresh train tasks",
+      "design_version": "v0-baseline",
+      "command": [
+        "uv",
+        "run",
+        "tau2",
+        "run",
+        "--domain",
+        "retail",
+        "--task-split-name",
+        "train",
+        "--task-ids",
+        "25",
+        "28",
+        "29",
+        "30",
+        "31",
+        "34",
+        "35",
+        "37",
+        "41",
+        "43",
+        "--agent-llm",
+        "ollama_chat/gpt-oss:20b",
+        "--user-llm",
+        "ollama_chat/gemma4:12b",
+        "--verbose-logs",
+        "--llm-log-mode",
+        "all",
+        "--save-to",
+        "baseline-fresh-10"
+      ],
+      "command_line": "uv run tau2 run --domain retail --task-split-name train --task-ids 25 28 29 30 31 34 35 37 41 43 --agent-llm ollama_chat/gpt-oss:20b --user-llm ollama_chat/gemma4:12b --verbose-logs --llm-log-mode all --save-to baseline-fresh-10",
+      "git": {
+        "commit": "321c4af5786ec5b3bddeaef2d14f0840905fb06a",
+        "branch": "main",
+        "code_paths": [
+          "src/tau2/agent",
+          "src/tau2/config.py",
+          "src/tau2/evaluator"
+        ],
+        "changed_files": [],
+        "untracked_files": [],
+        "diff_file": "agent_code.diff"
+      },
+      "judges": {
+        "nl": "ollama_chat/gemma4:12b",
+        "communicate": "ollama_chat/gemma4:12b"
+      }
+    }
+  ]
+}

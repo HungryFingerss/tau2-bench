@@ -51,14 +51,15 @@ def normalize_order_id(raw: str) -> str:
 
 def _check(notes: Notes, order_id: str) -> None:
     if notes.customer is None:
-        raise ToolError("Verify the customer first (verify_customer).")
+        raise ToolError("Verify the customer first (verify_customer).", fact=False)
     if not order_id:
-        raise ToolError("Need an order ID. Ask the customer which order they mean.")
+        raise ToolError("Need an order ID. Ask the customer which order they mean.", fact=False)
     if not notes.is_customers_order(order_id):
         theirs = ", ".join(notes.orders) or "none"
         raise ToolError(
             f"{order_id} is not one of {notes.customer.name}'s orders. "
-            f"Their orders are: {theirs}."
+            f"Their orders are: {theirs}.",
+            fact=False,
         )
 
 
@@ -71,10 +72,10 @@ def get_order(notes: Notes, order_id: str = "") -> ToolSteps:
 
     [r] = yield [StoreCall("get_order_details", {"order_id": order_id})]
     if r.error:
-        raise ToolError(f"Could not load order {order_id} ({r.content}).")
+        raise ToolError(f"Could not load order {order_id} ({r.content}).", fact=False)
     order = json.loads(r.content)
 
-    notes.record_order(order_id, order["status"])
+    notes.record_order(order_id, order["status"], order["items"])
     for it in order["items"]:
         notes.seen.remember(ITEM, it["item_id"])
         notes.seen.remember(PRODUCT, it["product_id"])

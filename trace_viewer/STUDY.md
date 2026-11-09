@@ -46,9 +46,16 @@ a reference solution, and (where defined) an LLM judge confirms what the agent t
 
 ## Results so far
 
+Final results, 9 Nov 2026 (the project stopped here; details in `MY_WORK.md`, sections 8–10):
+
 | Run | Design | Passed | Notes |
 |---|---|---|---|
 | baseline-practice-10-v2 | v0-baseline | 3 / 9 (33%) | 1 infra error (task 8) |
+| v1-practice-10 | v1-fde-agent, round 1 | 3 / 9 | task 4 unscored (customer timeouts) |
+| v1-practice-10-b | v1-fde-agent, round 2 | 6 / 9 | in-sample: fixes came from these tasks; task 0 unscored |
+| v1-unseen-10 | v1-fde-agent, round 2 | 6 / 10 | tasks 13–24 the fixes had never seen; no baseline run |
+| baseline-fresh-10 | v0-baseline | 1 / 5 | 5 of 10 tasks unscored (customer timeouts) |
+| v1-fresh-10 | v1-fde-agent, round 3 | 3 / 6 | 4 of 10 unscored; on the 4 tasks scored in both runs: baseline 1, mine 2 |
 
 ## Limitations
 
@@ -57,4 +64,8 @@ a reference solution, and (where defined) an LLM judge confirms what the agent t
 - **Local judge:** checked by hand on 3 verdicts (all correct); still weaker than the official judge.
 - **Simulated customers** with a small local model sometimes behave unusually; failures are checked
   in the conversation before being blamed on the agent.
+- **The customer model decides which tasks are scored.** On the fresh tasks it timed out (600 s) in
+  23 of the baseline's 24 failed attempts and 21 of my agent's 22, sometimes on its first message;
+  5 and 4 of the 10 tasks couldn't be scored. Comparisons use only tasks scored in both runs.
+- **The 40 held-out test tasks were never run.**
 - Two benchmark files were changed (judge model, judge-reply parsing); both are documented.

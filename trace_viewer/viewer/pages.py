@@ -3,17 +3,23 @@
 from pathlib import Path
 from typing import Any
 
-from viewer import dbdiff
+from viewer import agent_log, dbdiff, runmeta
 from viewer.artifacts import (
+    AGENT_LOG_FILE,
+    AGENT_LOG_TEMP_PREFIX,
     ARTIFACTS_DIR,
     JUDGE_CALLS,
+    NO_STATUS,
     SAVE_HINT,
+    SIM_PREFIX,
+    attempt_dirs,
     count_attempts,
     debug_files,
     describe_attempt,
     describe_call,
     find_nl_judge_model,
     find_sim_dir,
+    has_agent_log,
     join_steps,
     list_attempts,
     missing_call_reason,
@@ -30,8 +36,10 @@ from viewer.verdicts import (
     NONE_DEFINED,
     NOT_EVALUATED,
     PENDING,
+    benchmark_steps,
     db_state,
     message_counts,
+    model_calls_in,
     nl_state,
     pass_rate,
     result_state,
@@ -283,7 +291,107 @@ def _neighbours(rows: list[dict], task_id: str, trial: int) -> dict[str, Any]:
     }
 
 
-def task_page(store: Store, name: str, task_id: str, trial: int) -> dict[str, Any]:
+def _log_attempt(
+    run_dir: Path, task_id: str, sim: dict | None, requested: str | None
+) -> Path | None:
+    """The attempt whose agent log the page shows.
+
+    A requested attempt, else the one in results.json, else the newest attempt
+    with a log: one still running before one that ended.
+    """
+    if requested:
+        sim_dir = find_sim_dir(run_dir, task_id, requested)
+        if sim_dir is None:
+            raise NotFound(f"Attempt {requested} of task {task_id} does not exist.")
+        return sim_dir
+    if sim is not None:
+        sim_dir = find_sim_dir(run_dir, task_id, sim.get("id"))
+        return sim_dir if sim_dir and has_agent_log(sim_dir) else None
+    candidates = [d for d in attempt_dirs(run_dir, task_id) if has_agent_log(d)]
+    if not candidates:
+        return None
+    described = {d: describe_attempt(d, set()) for d in candidates}
+    return max(
+        candidates,
+        key=lambda d: (
+            described[d]["status"] == NO_STATUS,
+            described[d]["started_at"] or "",
+        ),
+    )
+
+
+def _run_is_alive(run_dir: Path) -> bool:
+    scan = runmeta.scan_artifacts(run_dir)
+    state = runmeta.run_state(
+        run_dir, runmeta.read_meta(run_dir), None, None, scan.newest_age_seconds
+    )
+    return state in (runmeta.RUNNING, runmeta.MAYBE_RUNNING)
+
+
+def agent_conversation(
+    store: Store, run_dir: Path, sim_dir: Path, sim: dict | None
+) -> dict[str, Any]:
+    """One attempt's conversation from fde_agent_log.json, with every internal step."""
+    sim_id = sim_dir.name.removeprefix(SIM_PREFIX)
+    in_results = sim is not None and sim.get("id") == sim_id
+    status = read_status(sim_dir)
+    read = store.read_settled(sim_dir / AGENT_LOG_FILE, AGENT_LOG_TEMP_PREFIX)
+    base = {
+        "sim_id": sim_id,
+        "in_results": in_results,
+        "status": (status or {}).get("status", NO_STATUS),
+        "reason": (status or {}).get("reason"),
+        "error": (status or {}).get("error"),
+        "live": status is None and _run_is_alive(run_dir),
+        "stale": read.stale,
+        "problem": read.problem,
+    }
+    if read.data is None:
+        return {**base, "available": False, "steps": [], "calls": []}
+    messages = (sim or {}).get("messages") if in_results else None
+    return {
+        **base,
+        "available": True,
+        **agent_log.build(read.data, read_calls(sim_dir), messages),
+    }
+
+
+def task_counts(
+    store: Store, run_dir: Path, task_id: str, sim: dict | None, fallback: bool
+) -> dict[str, Any] | None:
+    """What one task's conversation took: model calls, benchmark steps, checks.
+
+    From the agent's log when there is one, else from results.json alone, which
+    has no checks or internal steps. `fallback` allows the newest attempt with a
+    log when results.json has no simulation (only safe with one trial per task).
+    """
+    log_dir = _log_attempt(run_dir, task_id, sim, None) if sim or fallback else None
+    if log_dir is not None:
+        log = store.read_settled(log_dir / AGENT_LOG_FILE, AGENT_LOG_TEMP_PREFIX).data
+        if log:
+            sim_id = log_dir.name.removeprefix(SIM_PREFIX)
+            return {
+                "source": "agent_log",
+                "sim_id": sim_id,
+                "in_results": bool(sim) and sim.get("id") == sim_id,
+                **agent_log.counts(log.get("events") or []),
+            }
+    if sim is None:
+        return None
+    messages = sim.get("messages") or []
+    return {
+        "source": "results",
+        "sim_id": sim.get("id"),
+        "in_results": True,
+        "model_calls": model_calls_in(messages),
+        "benchmark_steps": benchmark_steps(messages),
+        "store_calls": sum(len(m.get("tool_calls") or []) for m in messages),
+    }
+
+
+def task_page(
+    store: Store, name: str, task_id: str, trial: int, attempt: str | None = None
+) -> dict[str, Any]:
     loaded = _load(store, name)
     run_dir = store.run_dir(name)
     data = loaded.data
@@ -292,6 +400,17 @@ def task_page(store: Store, name: str, task_id: str, trial: int) -> dict[str, An
     rows = _build_rows(run_dir, data, with_attempts=False)
     if (task_id, trial) not in [(r["task_id"], r["trial"]) for r in rows]:
         raise NotFound(f"Task {task_id} has no trial {trial}.")
+    log_dir = _log_attempt(run_dir, task_id, sim, attempt)
+    conversation = agent_conversation(store, run_dir, log_dir, sim) if log_dir else None
+    attempts = list_attempts(run_dir, task_id, _ids(data))
+    # Redraw as data arrives when the conversation is live, or when nothing is shown
+    # yet but an attempt is running: then there is no reader to disturb.
+    live = bool(conversation and conversation["live"]) or (
+        sim is None
+        and not (conversation or {}).get("available")
+        and any(a["status"] == NO_STATUS for a in attempts)
+        and _run_is_alive(run_dir)
+    )
 
     page: dict[str, Any] = {
         "run": name,
@@ -302,8 +421,10 @@ def task_page(store: Store, name: str, task_id: str, trial: int) -> dict[str, An
         "task": _task_view(task, sim),
         "task_raw": task,
         "neighbours": _neighbours(rows, task_id, trial),
-        "attempts": list_attempts(run_dir, task_id, _ids(data)),
+        "attempts": attempts,
         "links_ids": uses_canonical_retail_db(data.get("info") or {}),
+        "conversation": conversation,
+        "live": live,
     }
     if sim is None:
         return {**page, "sim": None, "timeline": []}
@@ -335,11 +456,24 @@ def task_page(store: Store, name: str, task_id: str, trial: int) -> dict[str, An
             ),
         },
         "reward_info": reward_info,
-        "raw_call_note": _raw_call_note(
-            find_sim_dir(run_dir, task_id, sim.get("id")), model_steps
+        "raw_call_note": (
+            _log_call_note(conversation)
+            if conversation and conversation["in_results"]
+            else _raw_call_note(
+                find_sim_dir(run_dir, task_id, sim.get("id")), model_steps
+            )
         ),
         "timeline": steps,
     }
+
+
+def _log_call_note(conversation: dict) -> str | None:
+    """For an agent log, the model calls it lists that have no raw file."""
+    missing = len(conversation.get("missing_calls") or [])
+    if not missing:
+        return None
+    total = (conversation.get("counts") or {}).get("model_calls")
+    return f"{missing} of {total} model calls in the agent's log have no raw call file. {SAVE_HINT}"
 
 
 def step_call(store: Store, name: str, sim_id: str, index: int) -> dict[str, Any]:
@@ -354,13 +488,15 @@ def step_call(store: Store, name: str, sim_id: str, index: int) -> dict[str, Any
     sim_dir = find_sim_dir(store.run_dir(name), sim.get("task_id"), sim_id)
     calls = read_calls(sim_dir) if sim_dir else []
     call = join_steps(messages, calls).get(index)
+    reason = None
+    if call is None:
+        reason = _written_without_a_model(store, sim_dir, message)
+        reason = reason or missing_call_reason(message, sim_dir, len(calls))
     return {
         "index": index,
         "role": message.get("role"),
         "call": call,
-        "missing_reason": (
-            None if call else missing_call_reason(message, sim_dir, len(calls))
-        ),
+        "missing_reason": reason,
         "results_record": {
             key: message.get(key)
             for key in (
@@ -373,6 +509,42 @@ def step_call(store: Store, name: str, sim_id: str, index: int) -> dict[str, Any
             )
         },
     }
+
+
+WRITTEN_BY_CODE = (
+    "Written by the agent's code, not by a model, so no model call was made. "
+    "The agent's log (fde_agent_log.json) marks it by: code."
+)
+STORE_CALLS_BY_CODE = (
+    "These store calls were sent by one of the agent's own tools, not chosen by a "
+    "model directly. The model call that picked the tool is on the agent's step above."
+)
+
+
+def _written_without_a_model(
+    store: Store, sim_dir: Path | None, message: dict
+) -> str | None:
+    """For an agent with its own log, say when code wrote a message."""
+    if sim_dir is None or message.get("role") != "assistant":
+        return None
+    if not has_agent_log(sim_dir):
+        return None
+    log = store.read_settled(sim_dir / AGENT_LOG_FILE, AGENT_LOG_TEMP_PREFIX).data
+    if not log:
+        return None
+    if message.get("tool_calls"):
+        return STORE_CALLS_BY_CODE
+    writer = agent_log.writer_of(log, message.get("content"))
+    if writer == "code":
+        return WRITTEN_BY_CODE
+    if writer == "benchmark":
+        return "This line is scripted by the benchmark, so no model call was made."
+    if writer == "model":
+        return (
+            "Written by the model, but no saved call has this message's exact "
+            f"generation_time_seconds. {SAVE_HINT}"
+        )
+    return None
 
 
 def db_diff(store: Store, replayer: Replayer, name: str, sim_id: str) -> dict[str, Any]:
@@ -440,11 +612,19 @@ def attempt_page(store: Store, name: str, task_id: str, sim_id: str) -> dict[str
     sim_dir = _attempt_dir(store, name, task_id, sim_id)
     data = _load(store, name).data
     calls = read_calls(sim_dir)
+    sim = next(
+        (s for s in data.get("simulations") or [] if s.get("id") == sim_id), None
+    )
     return {
         "attempt": describe_attempt(sim_dir, _ids(data)),
         "status_file": read_status(sim_dir),
         "calls": [describe_call(call) for call in calls],
         "conversation": rebuild_conversation(calls),
+        "agent_log": (
+            agent_conversation(store, store.run_dir(name), sim_dir, sim)
+            if has_agent_log(sim_dir)
+            else None
+        ),
     }
 
 

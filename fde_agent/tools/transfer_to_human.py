@@ -15,6 +15,7 @@ Code makes sure of the rest:
 from fde_agent.errors import ToolError
 from fde_agent.notes import Notes
 from fde_agent.store import StoreCall, ToolSteps
+from fde_agent.tools.prepare_change import title
 
 NAME = "transfer_to_human"
 
@@ -40,15 +41,16 @@ def transfer_to_human(notes: Notes, summary: str = "") -> ToolSteps:
     notes.check_open()   # a second transfer is refused here
     summary = (summary or "").strip()
     if not summary:
-        raise ToolError("Give a short summary of the customer's issue for the human agent.")
+        raise ToolError("Give a short summary of the customer's issue for the human agent.", fact=False)
 
     p = notes.prepared
     if p is not None and notes.transfer_warned != p.number:
         notes.transfer_warned = p.number
         raise ToolError(
-            f"Wait: change #{p.number} ({p.customer_text.splitlines()[0]}) is prepared but not done. "
+            f"Wait: change #{p.number} ({title(p.customer_text)}) is prepared but not done. "
             f"After a transfer nothing more can be done. If the customer still wants it, get their "
-            f"clear yes and confirm_change first. If they don't, call transfer_to_human again."
+            f"clear yes and confirm_change first. If they don't, call transfer_to_human again.",
+            fact=False,
         )
 
     if notes.customer is not None:
@@ -56,7 +58,7 @@ def transfer_to_human(notes: Notes, summary: str = "") -> ToolSteps:
 
     [r] = yield [StoreCall("transfer_to_human_agents", {"summary": summary})]
     if r.error:
-        raise ToolError(f"The transfer failed ({r.content}).")
+        raise ToolError(f"The transfer failed ({r.content}).", fact=False)
 
     dropped = ""
     if p is not None:

@@ -1,6 +1,8 @@
 // Trace viewer frontend. All model output is untrusted text: it only ever reaches
 // the page as text nodes, never as HTML.
 
+import { COUNT_COLUMNS, agentChecksTab, countCells } from "./agentcounts.js";
+import { agentTimeline, conversationHeader, modelCallsPanel, setInnerVisible } from "./agentlog.js";
 import { checksPanel, checksTab } from "./checks.js";
 import { renderCompare } from "./compare.js";
 import { openRecord, renderExplorer, renderRecordPage } from "./database.js";
@@ -293,6 +295,7 @@ const ROW_COLUMNS = [
   ["Turns", "Customer messages.", "num"],
   ["Tool calls", "Tool calls made during the conversation.", "num"],
   ["Tool errors", "Tool results with error: true.", "num"],
+  ...COUNT_COLUMNS,
   ["Attempts", "Folders in artifacts/ for this task, across all trials. Failed attempts were retried by the runner and are not in results.json.", "num"],
   ["Labels", "Failure labels you have saved on this task."],
   ["Why"],
@@ -325,6 +328,7 @@ function taskRow(run, row, showTrial) {
     cell(row.turns, "num"),
     cell(row.tool_calls, "num"),
     cell(row.tool_errors, "num"),
+    countCells(row.agent),
     el("td", { class: "num nowrap", text: attemptsText(row.attempts) }),
     el("td", { class: "small", text: (row.labels ?? []).join(", ") }),
     cell(row.why, "why"),
@@ -478,10 +482,12 @@ async function renderRun(name) {
     ),
   );
   const checks = checksTab(page, name);
-  const panes = { results, checks };
+  const hasLogs = (page.agent_totals?.tasks_with_log ?? 0) > 0;
+  const panes = { results, checks, ...(hasLogs ? { agent: agentChecksTab(page, name) } : {}) };
   const tabBar = el("div", { class: "tabs", role: "tablist" });
   const pane = el("div", { class: "run-pane" });
   const selectTab = (tab) => {
+    if (!panes[tab]) tab = "results";
     runTab = tab;
     [...tabBar.children].forEach((button) =>
       button.setAttribute("aria-selected", String(button.dataset.tab === tab)),
@@ -491,6 +497,7 @@ async function renderRun(name) {
   [
     ["results", "Results"],
     ["checks", "Automatic checks"],
+    ...(hasLogs ? [["agent", "Agent checks"]] : []),
   ].forEach(([tab, label]) =>
     tabBar.append(
       el("button", { class: "tab", type: "button", role: "tab", "data-tab": tab, text: label, onclick: () => selectTab(tab) }),
@@ -742,8 +749,33 @@ function toolCard(call) {
   );
 }
 
+// Who wrote a message, for agents whose log says so: the model, code, or the
+// benchmark's greeting. A message code wrote has no model call by design.
+function writerLine(step) {
+  const by = step.written_by;
+  if (!by) return null;
+  if (by === "model") {
+    return el(
+      "div",
+      { class: "writer" },
+      el("span", { class: "chip pass", text: "Written by the model" }),
+      !step.call_file && el("span", { class: "chip fail", text: "raw call file not found" }),
+    );
+  }
+  if (by === "benchmark") {
+    return el("div", { class: "writer" }, el("span", { class: "chip plain", text: "The benchmark's greeting" }), " Scripted: no model call.");
+  }
+  const source = step.via
+    ? `Sent by the agent's tool ${step.via.tool}${step.via.id ? ` (${step.via.id})` : ""}, not chosen by a model directly.`
+    : step.code_source;
+  return el("div", { class: "writer" }, el("span", { class: "chip code", text: "Written by code" }), ` ${source ?? ""} No model call.`);
+}
+
 function stepNode(step, onRaw) {
-  const hasRawButton = onRaw && ["agent", "customer"].includes(step.type);
+  // A step from an agent's log names its raw call file, or has none: code wrote it.
+  const fromLog = "call_file" in step || "written_by" in step;
+  const canOpen = fromLog ? Boolean(step.call_file) : ["agent", "customer"].includes(step.type);
+  const hasRawButton = onRaw && canOpen;
   const reasoning =
     step.reasoning &&
     el(
@@ -772,6 +804,7 @@ function stepNode(step, onRaw) {
           onclick: (event) => onRaw(step, event.currentTarget),
         }),
     ),
+    writerLine(step),
     step.content && el("div", { class: "step-text" }, linked(step.content)),
     reasoning,
     (step.tool_calls ?? []).map(toolCard),
@@ -868,27 +901,76 @@ function infraDetails(sim) {
   );
 }
 
-async function renderTask(run, taskId, trial) {
+function attemptLink(run, taskId, trial, simId) {
+  const params = new URLSearchParams();
+  if (trial) params.set("trial", trial);
+  params.set("attempt", simId);
+  return `${runLink(run)}/task/${enc(taskId)}?${params}`;
+}
+
+// Open one saved call of an attempt, by its llm_debug file name.
+async function openAttemptCall(run, taskId, simId, file, title, opener) {
+  drawerLoading(title, opener);
+  try {
+    const call = await api(`/api/runs/${enc(run)}/attempts/${enc(taskId)}/${enc(simId)}/calls/${enc(file)}`);
+    openDrawer({
+      title: `${title} · ${formatTime(call.timestamp)}`,
+      subtitle: `Attempt ${simId.slice(0, 8)}: ${file}`,
+      tabs: callTabs({ call, swapped: call.call_name === "user_simulator_response" }),
+    });
+  } catch (error) {
+    openDrawer({ title, subtitle: error.message, tabs: [] });
+  }
+}
+
+function logActions(run, taskId, simId) {
+  return {
+    stepNode,
+    scrollTo: scrollToStep,
+    openCall: (file, title, opener) => {
+      highlightStep(opener?.closest?.(".step") ?? null);
+      return openAttemptCall(run, taskId, simId, file, title, opener);
+    },
+  };
+}
+
+async function renderTask(run, taskId, trial, attempt = null) {
   const title = `Task ${taskId}${trial ? `, trial ${trial}` : ""}`;
   setCrumbs({ label: run, href: runLink(run) }, { label: title });
   document.title = `${title} · ${run}`;
-  const page = await api(`/api/runs/${enc(run)}/tasks/${enc(taskId)}?trial=${trial}`);
+  const query = new URLSearchParams({ trial });
+  if (attempt) query.set("attempt", attempt);
+  const page = await api(`/api/runs/${enc(run)}/tasks/${enc(taskId)}?${query}`);
   if (page.links_ids) await loadIds();
   setLinking(page.links_ids);
 
+  const conversation = page.conversation?.available ? page.conversation : null;
   const onRaw = (step, opener) => openStepCall(page, step, opener);
-  const timeline = el(
-    "section",
-    { class: "timeline", "aria-label": "Conversation" },
-    page.timeline.map((step) => stepNode(step, page.sim ? onRaw : null)),
-  );
+  const actions = conversation && logActions(run, taskId, conversation.sim_id);
+  const timeline = conversation
+    ? agentTimeline(conversation, actions)
+    : el(
+        "section",
+        { class: "timeline", "aria-label": "Conversation" },
+        page.timeline.map((step) => stepNode(step, page.sim ? onRaw : null)),
+      );
+  const source =
+    conversation &&
+    conversationHeader(conversation, {
+      attempts: page.attempts,
+      attemptLink: (simId) => attemptLink(run, taskId, trial, simId),
+      onToggle: (visible) => setInnerVisible(timeline, visible),
+    });
   const emptyNote =
+    !conversation &&
     !page.timeline.length &&
     el("div", {
       class: "panel subtle",
-      text: page.sim
-        ? "results.json holds no conversation for this simulation. Open a failed attempt on the right to see how far it got."
-        : "No conversation yet.",
+      text: page.conversation?.problem
+        ? `The agent's log could not be read: ${page.conversation.problem}`
+        : page.sim
+          ? "results.json holds no conversation for this simulation. Open a failed attempt on the right to see how far it got."
+          : "No conversation yet.",
     });
 
   const side = el(
@@ -898,6 +980,7 @@ async function renderTask(run, taskId, trial) {
     page.sim && differencePanel(page),
     labelsPanel(page),
     page.checks.length > 0 && checksPanel(page, scrollToStep),
+    conversation && modelCallsPanel(conversation, actions),
     attemptsPanel(page),
     taskPanel(page.task),
     el(
@@ -922,15 +1005,17 @@ async function renderTask(run, taskId, trial) {
     el(
       "div",
       { class: "task-layout" },
-      el("div", { style: "display:grid;gap:12px;min-width:0" }, emptyNote, infraDetails(page.sim), timeline),
+      el("div", { style: "display:grid;gap:12px;min-width:0" }, emptyNote, infraDetails(page.sim), source, timeline),
       side,
     ),
   );
+  return page;
 }
 
 // ---- Drawer ----
 
 function promptRoleLabel(role, swapped) {
+  if (role === "system") return "system (added mid-conversation)";
   if (!swapped) return role;
   if (role === "user") return "user (this is the agent)";
   if (role === "assistant") return "assistant (this is the simulated customer)";
@@ -968,8 +1053,10 @@ function callTabs({ call, record, swapped, reason }) {
   const choice = record?.raw_data?.choices?.[0];
   const reasoning = choice?.message?.reasoning_content;
   const messages = request.messages ?? [];
-  const system = messages.filter((m) => m.role === "system");
-  const history = messages.filter((m) => m.role !== "system");
+  // The prompt is the first system message. Later ones are notes an agent added
+  // mid-conversation (fde_agent does), so they stay in the history where they were.
+  const system = messages[0]?.role === "system" ? [messages[0]] : [];
+  const history = messages.slice(system.length);
   const usage = response.usage ?? record?.usage;
   const seconds = response.generation_time_seconds ?? record?.generation_time_seconds;
 
@@ -1127,7 +1214,20 @@ async function openAttempt(page, attempt, opener) {
   try {
     const data = await api(base);
     const label = ATTEMPT_LABELS[data.attempt.status] ?? data.attempt.status;
-    const stepsCount = data.conversation.length;
+    const log = data.agent_log?.available ? data.agent_log : null;
+    const stepsCount = log ? log.steps.length : data.conversation.length;
+    const logTab = () =>
+      el(
+        "div",
+        {},
+        el(
+          "p",
+          { class: "caption" },
+          "From the agent's own log (fde_agent_log.json), with every internal step. ",
+          el("a", { href: attemptLink(page.run, page.task_id, page.trial, attempt.sim_id), text: "Show on the page" }),
+        ),
+        agentTimeline(log, logActions(page.run, page.task_id, attempt.sim_id)),
+      );
     const conversationTab = () =>
       el(
         "div",
@@ -1144,7 +1244,7 @@ async function openAttempt(page, attempt, opener) {
       title,
       subtitle: `${label}${data.attempt.error ? `: ${data.attempt.error}` : ""}`,
       tabs: [
-        { label: `Conversation (${stepsCount})`, render: conversationTab },
+        { label: `Conversation (${stepsCount})`, render: log ? logTab : conversationTab },
         { label: `Model calls (${data.calls.length})`, render: () => attemptCallList(base, data.calls, attempt, page) },
         {
           label: "task.log",
@@ -1215,8 +1315,12 @@ async function route() {
       await render();
       if (a && b) watch([a, b], refreshing(render));
     } else if (parts[0] === "run" && parts[2] === "task") {
-      await renderTask(parts[1], parts[3], Number(params.get("trial") ?? 0));
-      watch([parts[1]], offerReload);
+      const render = () =>
+        renderTask(parts[1], parts[3], Number(params.get("trial") ?? 0), params.get("attempt"));
+      const page = await render();
+      // A live conversation redraws as the agent rewrites its log. Otherwise new
+      // data is offered, so a page being read is never redrawn under the reader.
+      watch([parts[1]], page.live ? refreshing(render) : offerReload);
     } else if (parts[0] === "run" && parts[2] === "design") {
       await renderRunDesign(view, parts[1], params.get("decision"), setCrumbs);
       if (params.get("decision")) return;

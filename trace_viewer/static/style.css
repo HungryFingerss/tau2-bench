@@ -689,6 +689,112 @@ details > summary {
   overflow-y: auto;
 }
 
+/* An agent's own log: who wrote each message, steps inside the agent, checks */
+
+.chip.code {
+  background: var(--infra-bg);
+  color: var(--infra);
+}
+
+.writer {
+  margin: 0 0 4px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.step.inner {
+  margin-left: 28px;
+  padding: 5px 10px 7px;
+  background: var(--sunken);
+  border-left-color: var(--line);
+  font-size: 0.92rem;
+}
+
+.step.inner .step-label {
+  color: var(--muted);
+}
+
+.step.inner.model-call {
+  border-left-color: var(--agent);
+}
+
+.step.inner.failed {
+  border-left-color: var(--fail);
+  background: var(--fail-bg);
+}
+
+.step.inner.note {
+  border-left-style: dashed;
+  border-left-color: var(--infra);
+}
+
+.step.inner pre {
+  margin-top: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.step.log-check {
+  margin-left: 28px;
+  background: var(--warn-bg);
+  border-color: var(--warn);
+  border-left: 6px solid var(--warn);
+}
+
+.step.log-check .step-label {
+  color: var(--warn);
+}
+
+.step.log-check.tool_crash,
+.step.log-check.safe_message,
+.step.log-check.blocked_reply {
+  background: var(--fail-bg);
+  border-color: var(--fail);
+}
+
+.step.log-check.tool_crash .step-label,
+.step.log-check.safe_message .step-label,
+.step.log-check.blocked_reply .step-label {
+  color: var(--fail);
+}
+
+.step.log-check .caption {
+  margin: 0 0 4px;
+}
+
+.timeline.hide-inner .step.inner {
+  display: none;
+}
+
+.conversation-source p {
+  margin: 4px 0 0;
+}
+
+@media (max-width: 520px) {
+  .step.inner,
+  .step.log-check {
+    margin-left: 10px;
+  }
+}
+
+/* Counts from agents' logs */
+
+td.num.flag {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+tr.total-row td {
+  border-top: 2px solid var(--line);
+  font-weight: 600;
+}
+
+.breakdowns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 12px;
+}
+
 /* Attempts */
 
 .attempt {

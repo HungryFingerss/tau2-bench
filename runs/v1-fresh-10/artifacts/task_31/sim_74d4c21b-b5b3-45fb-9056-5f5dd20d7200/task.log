@@ -1,0 +1,15 @@
+2026-11-09 06:31:44.529 | DEBUG    | tau2.runner.batch:__enter__:328 - Task log file: C:\Users\jagan\Projects\100days\agent-on-tau2-bench\data\simulations\v1-fresh-10\artifacts\task_31\sim_74d4c21b-b5b3-45fb-9056-5f5dd20d7200\task.log
+2026-11-09 06:31:44.934 | INFO     | tau2.orchestrator.orchestrator:_validate_mode_compatibility:494 - Orchestrator initialized in HALF_DUPLEX mode (turn-based) with agent=FdeAgent, user=UserSimulator
+2026-11-09 06:31:44.935 | DEBUG    | tau2.runner.build:build_text_orchestrator:657 - Built text orchestrator: domain=retail, agent=fde_agent, user=user_simulator, task=31
+2026-11-09 06:31:46.505 | DEBUG    | tau2.orchestrator.orchestrator:step:850 - Step 0. Sending message from Role.AGENT to Role.USER
+2026-11-09 06:31:46.505 | DEBUG    | tau2.orchestrator.orchestrator:step:853 - Step 0.
+From role: Role.AGENT
+To role: Role.USER
+Message: AssistantMessage
+content: Hi! How can I help you today?
+is_final_chunk: True
+2026-11-09 06:31:46.505 | DEBUG    | tau2.user.user_simulator:_generate_next_message:181 - User responds to message: AssistantMessage
+content: Hi! How can I help you today?
+is_final_chunk: True
+2026-11-09 07:12:03.033 | ERROR    | tau2.utils.llm_utils:_generate_once:685 - litellm.APIConnectionError: Ollama_chatException - litellm.Timeout: Connection timed out after 600.0 seconds.
+2026-11-09 07:12:03.033 | WARNING  | tau2.orchestrator.orchestrator:run:301 - Simulation loop exited with an exception — running emergency cleanup

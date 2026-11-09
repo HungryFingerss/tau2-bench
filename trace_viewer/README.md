@@ -132,6 +132,65 @@ Keep the viewer open in another terminal to watch the run arrive.
 - **Light and dark mode:** the button at the top right. Until you pick one, the viewer
   follows your system's setting. The choice is kept in this browser only.
 
+## Agents with their own log
+
+`fde_agent` writes `fde_agent_log.json` next to each conversation's `llm_debug/`
+folder (see `fde_agent/LOG_FORMAT.md`). When a conversation has one, the task page is
+built from it, and shows what the benchmark never recorded:
+
+- **Every model call**, with what it led to ("called get_order (tc-3)", "rejected
+  before anything ran"). *Raw call* opens its `llm_debug` file, matched on the exact
+  `generation_time_seconds`. One benchmark turn can hold several model calls.
+- **Each call to the agent's own tools** (`tc-N`) with its inputs, and what the tool
+  returned: exactly the text the model saw.
+- **Notes from code to the model**, and the store calls each tool sent (`fde-N`, the
+  same IDs as in `results.json`).
+- **Who wrote each message**: the model, code (a change summary, the transfer
+  sentence, the safe message) or the benchmark's greeting. A message code wrote says
+  so, and has no raw call by design.
+- **CHECK events**, highlighted where they happened: `invalid_call`, `fixed`,
+  `ignored_inputs`, `blocked_reply`, `empty_reply`, `safe_message`, `tool_crash`.
+- **Model calls** on the right lists every saved call of the attempt, including
+  those no message points to.
+
+Untick *Show the agent's internal steps* to see only what the benchmark saw. If
+`results.json` does not hold the conversation yet, the page shows the newest attempt
+with a log, a running one first. `?attempt=<sim id>` picks another, and the attempt
+drawer shows its log too. While a conversation runs, the page redraws each time the
+agent rewrites its log.
+
+### Counts
+
+- **Model calls** and **Steps** are columns on every run's Results table. Steps are
+  what the benchmark's `max_steps` counts: each customer message, each agent message
+  after the greeting, and each batch of tool results. For `llm_agent` both come from
+  `results.json`. For an agent with a log, model calls include every retry inside a
+  turn. `*` marks a count taken from an attempt that `results.json` does not hold yet.
+- **Agent checks** (a run tab, shown when tasks have logs): per task, how often each
+  CHECK fired, with model calls, steps, tool calls and store calls, and the run's
+  totals. Below it, `ignored_inputs` broken down by change kind, by input name, and
+  by both.
+- **Compare** shows model calls / steps per task on each side, the CHECKs each task
+  fired, and each run's totals.
+
+### Comparing designs with different decision ids
+
+v0's decisions are D1-D18 and v1's are F1-F18, so a plain id comparison would list
+18 removed and 18 added. Instead, the design difference (on Compare and on Designs)
+reads v1 through each F decision's `addresses` list. Every D decision sits next to
+the F decisions that replace it, and the F decisions that are new come last. When
+comparing runs, two more columns show the failures each run linked to that decision,
+or to its replacements, through failure labels.
+
+Labels on a v1 task link to F decisions, and the defaults come from v1's
+`label_links`. The decision picker and *What's breaking* show what each F decision
+addresses, such as "F6: Identity gate in code (addresses D3)".
+
+The agent replaces its log with `os.replace` after every turn. On Windows, a reader
+holding the file open at that moment makes the swap fail, so the viewer reads it by
+the same rules as `results.json`: only once it has been quiet for a second and no
+`.fde_log_*.tmp` file exists, serving the previous copy meanwhile.
+
 ## Testing your agent's tools
 
 The **Tools** page runs the tools in `fde_agent/tools/` by hand, against the real retail
@@ -216,9 +275,19 @@ Use this instead of `uv run tau2 run`, so the run can be understood later:
 | `--name` | The run's folder name. Defaults to the date and design. |
 | `--resume` | Continue an existing run. It cannot change design partway. |
 
-Everything after `--` goes to `tau2 run`. The script adds `--verbose-logs`,
+Everything after `--` goes to the benchmark. The script adds `--verbose-logs`,
 `--llm-log-mode all` and `--save-to`, and sets `UV_FROZEN=1` so the root `uv.lock` is
 not rewritten.
+
+The design file says how the benchmark is started, in `entry_point`. Without one it
+is `uv run tau2 run`. `v1-fde-agent` starts `uv run python -m fde_agent.run run`,
+which registers `fde_agent` and then runs tau2 with the same arguments:
+
+```powershell
+.\trace_viewer\record_run.cmd --design v1-fde-agent --note "smoke test" --name v1-smoke-task0 -- --domain retail --task-split-name train --task-ids 0 --agent fde_agent --agent-llm ollama_chat/gpt-oss:20b --user-llm ollama_chat/gemma4:12b
+```
+
+`--agent fde_agent` is still needed: the design must match the agent that runs.
 
 In Windows PowerShell 5.1, escape the double quotes in JSON arguments. PowerShell
 removes them otherwise, and `tau2` then refuses the value:
@@ -247,6 +316,13 @@ and change what differs. Each decision has an ID, a status of `implemented` or
 
 `not_handled` entries record what the agent does not do. They use the same D numbers,
 so a failure can be linked to a gap in the design.
+
+`v1-fde-agent.yaml` describes my own agent in `fde_agent/` as decisions F1-F18. The
+different letter keeps them apart from the baseline's D1-D18. Each F decision has an
+`addresses` list naming the baseline decisions it replaces, such as `F6` (identity gate
+in code) addressing `D3` (identity verification is prompt-only). Its prompt has no
+template: the whole system prompt is `fde_agent/instructions.md`, so the design keeps
+the file's text under `system_prompt.instruction` and a test checks the two are equal.
 
 Cited line numbers go stale when code changes, so a design stores a hash of each file
 it cites, and the viewer warns when one no longer matches. After updating a design,

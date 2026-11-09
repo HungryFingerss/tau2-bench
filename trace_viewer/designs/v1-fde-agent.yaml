@@ -1,0 +1,969 @@
+# My own agent for the retail domain, in fde_agent/.
+#
+# Written by hand from the source, like v0-baseline.yaml. tests/test_designs.py checks
+# every cited symbol and line range against the real code, and checks that the prompt
+# text and tool list below match the code and the saved runs. If a cited file
+# changes, the viewer warns that line numbers may be off.
+#
+# Decision ids are F1, F2, ... so they are never confused with the baseline's D1-D18.
+# `addresses` lists the baseline decisions each one replaces or fixes, if any.
+
+version: v1-fde-agent
+title: fde_agent
+description: >-
+  My own agent. The model sees short instructions and 7 combined tools instead of the
+  policy and the 15 store tools. Code keeps working notes, reads the store's data,
+  checks every model reply before anything runs, and owns the moments that matter:
+  identity, the change summary, the customer's yes, and the transfer. Every internal
+  step goes to the agent's own log, fde_agent_log.json.
+
+applies_to:
+  agent_implementation: fde_agent
+
+# What record_run.py starts. It registers fde_agent with the benchmark, then hands
+# the same arguments to tau2's own command line.
+entry_point: [uv, run, python, -m, fde_agent.run, run]
+
+# What record_run.py saves a git diff of.
+code_paths:
+  - fde_agent/
+
+# The tool calls in results.json are store calls that our tools send, not calls to
+# the 7 tools the model sees. The viewer's invalid-call check uses this design's
+# tool list for them: the store's own tools, exactly as the benchmark defines them.
+store_tools_from: v0-baseline
+
+parameters:
+  model: >-
+    Set per run with --agent-llm. Without it, ollama_chat/gpt-oss:20b
+    (agent.DEFAULT_MODEL).
+  temperature: >-
+    0.0, from DEFAULT_LLM_ARGS_AGENT unless --agent-llm-args overrides it. The model
+    client also defaults to 0.0.
+  seed: A per-trial seed set by the runner (FdeAgent.set_seed), passed to every call.
+  model_call_attempts: >-
+    3 per model call (model_client.ATTEMPTS), each with generate()'s own 3 API retries.
+    Broken tool-call JSON is never retried: it goes back to the model as an error.
+  max_failed_tries: >-
+    5 failing tries in a row (driver.MAX_FAILED_TRIES), then code sends a safe message.
+  max_tokens: Not set. The provider default applies.
+  max_steps: 200, from DEFAULT_MAX_STEPS. Only store calls and messages are steps.
+  max_errors: 10, from DEFAULT_MAX_ERRORS. Only store errors count.
+
+system_prompt:
+  file: fde_agent/instructions.md
+  composition: >-
+    The whole system prompt is fde_agent/instructions.md, stripped
+    (prompt.load_instructions). No policy text and no language clause. Notes from code
+    (a summary was shown, a reply was blocked, a call was rejected) are added later as
+    extra system messages, and are in the agent's log as `note` events.
+  instruction: |-
+    You are a customer service agent for an online store. You help one customer per conversation with their orders: cancelling or changing pending orders, returning or exchanging delivered orders, changing their default address, and questions about their profile, their orders and our products.
+
+    ## How to talk
+    - Write short, friendly, plain text. No tables, no markdown, no headings.
+    - When you need information, ask one clear question at a time.
+    - Only state facts the customer told you or a tool showed you. Don't guess, and don't give personal opinions or recommendations.
+    - Never show the customer internal IDs: item IDs (item_...), product IDs (product_...) or payment IDs (credit_card_..., gift_card_..., paypal_...). Describe items by name and options, and payment methods like "your Mastercard ending 2478". Order numbers (#W...) are fine.
+
+    ## Start: verify the customer
+    Before anything else, verify the customer with verify_customer, using their email, or their first name, last name and zip code. Ask for these if you don't have them. A user ID alone is not enough, even if the customer gives one.
+
+    ## Never decide for the customer
+    If the customer hasn't told you something you need, ask. Never pick it yourself:
+    - the reason for a cancellation ("no longer needed" or "ordered by mistake")
+    - the payment method to pay or receive a price difference, or where a refund goes
+    - which order, which items, or which option they want
+
+    ## Finding facts
+    - get_order: one order's items, prices, payments, and what is possible for its status.
+    - find_variants: a product's options, and which ones are available.
+    - find_replacement: the same item with only the changes the customer asked for.
+    Use what these tools return. If a tool says something isn't possible or isn't available, tell the customer plainly and offer the alternatives it showed.
+
+    ## Making a change
+    1. Gather everything first: every item the customer wants changed or exchanged in that order, and any address or payment change. Do address and payment changes before an item change, because after an item change the order can't be changed again.
+    2. Call prepare_change. It checks the change; it does not make it. The system then shows the customer the summary itself, so don't repeat or reword it.
+    3. Wait for the customer's answer. If they clearly say yes, call confirm_change with the change number. If they want anything different, call prepare_change again.
+    4. Never say a change is done until confirm_change has succeeded.
+
+    ## When a request can't be done
+    If a request is against the store's rules, explain that it can't be done, and don't look for workarounds. Use transfer_to_human only as its description says.
+
+    ## Tools
+    Call one tool at a time, and never write to the customer in the same reply as a tool call. When a tool returns an error, read it: it says what to fix.
+
+decisions:
+  - id: F1
+    name: Own short instructions instead of the full policy
+    status: implemented
+    addresses: [D1]
+    what: >-
+      The system prompt is instructions.md, about a page, instead of the benchmark's
+      instruction plus the whole retail policy. Rules that code enforces are not
+      repeated to the model. A coverage table quotes every rule sentence of policy.md
+      and points at the code or instruction line that handles it.
+    code_enforces: >-
+      Which text is sent. A test fails if a policy rule is quoted by no row of the
+      table, or if a row points at code or instruction text that no longer exists.
+    left_to_model: The rules that stay in the instructions, such as asking instead of guessing.
+    source:
+      - file: fde_agent/instructions.md
+        lines: [1, 34]
+      - file: fde_agent/prompt.py
+        symbol: load_instructions
+        lines: [8, 9]
+      - file: fde_agent/model_client.py
+        symbol: ModelClient.__init__
+        lines: [190, 193]
+      - file: fde_agent/policy_coverage.py
+        symbol: ROWS
+        lines: [25, 161]
+
+  - id: F2
+    name: 7 combined tools instead of the store's tools
+    status: implemented
+    addresses: [D2]
+    what: >-
+      The model sees 7 tools of our own instead of the 16 the baseline offers (the
+      store's 15 plus calculate). Each tool makes the store calls it needs, so the
+      model never sees the store's tools or its raw JSON.
+    code_enforces: >-
+      The tool list. Writes are only possible through confirm_change.
+    left_to_model: Which of the 7 tools to call, when, and with what inputs.
+    source:
+      - file: fde_agent/toolset.py
+        symbol: MODULES
+        lines: [17, 25]
+      - file: fde_agent/toolset.py
+        symbol: TOOLS
+        lines: [28, 28]
+      - file: fde_agent/model_client.py
+        symbol: SPECS
+        lines: [57, 57]
+      - file: fde_agent/agent.py
+        symbol: FdeAgent.__init__
+        lines: [41, 51]
+
+  - id: F3
+    name: Store calls only go through the benchmark
+    status: implemented
+    addresses: []
+    what: >-
+      Our tools are generators: they yield the store calls they need and wait. The
+      driver returns those calls to the benchmark as the agent's tool calls (fde-1,
+      fde-2, ...), and the results come back in the next turn. Every store call is a
+      real, recorded call in results.json.
+    code_enforces: >-
+      That no tool touches the store itself, and that results are matched to calls by
+      ID, never by position.
+    left_to_model: Nothing.
+    source:
+      - file: fde_agent/store.py
+        symbol: StoreCall
+        lines: [21, 24]
+      - file: fde_agent/store.py
+        symbol: ToolSteps
+        lines: [34, 34]
+      - file: fde_agent/driver.py
+        symbol: Driver._advance
+        lines: [305, 333]
+      - file: fde_agent/driver.py
+        symbol: Driver.on_store_results
+        lines: [172, 187]
+      - file: fde_agent/agent.py
+        symbol: to_assistant_message
+        lines: [84, 95]
+
+  - id: F4
+    name: Typed ID labels and a "has a tool shown this ID?" check
+    status: implemented
+    addresses: [D6]
+    what: >-
+      The model only sees item and product IDs with a label (item_..., product_...).
+      Before any store call, code checks the label and that a tool really showed that
+      ID in this conversation, then strips the label.
+    code_enforces: >-
+      A product ID can't be used as an item ID or the other way round, and an
+      invented ID is refused before the store is touched.
+    left_to_model: Copying the right ID from a tool result.
+    source:
+      - file: fde_agent/ids.py
+        symbol: label
+        lines: [29, 33]
+      - file: fde_agent/ids.py
+        symbol: SeenIds
+        lines: [36, 46]
+      - file: fde_agent/ids.py
+        symbol: unlabel
+        lines: [54, 83]
+
+  - id: F5
+    name: Working notes kept by code
+    status: implemented
+    addresses: [D15]
+    what: >-
+      Code keeps notes of what is established: the verified customer, their orders
+      and statuses, payment methods, IDs shown, the prepared change, whether it was
+      shown, the customer's reply, changes done, and whether a transfer happened.
+      Tools read the notes to enforce rules.
+    code_enforces: >-
+      One customer per conversation, only their own orders and payment methods, at
+      most one prepared change, and nothing after a transfer.
+    left_to_model: The customer's wishes and conditions, from the conversation.
+    source:
+      - file: fde_agent/notes.py
+        symbol: Notes
+        lines: [41, 115]
+
+  - id: F6
+    name: Identity gate in code
+    status: implemented
+    addresses: [D3]
+    what: >-
+      Every tool except verify_customer and transfer_to_human refuses until
+      verify_customer has succeeded. The refusal costs no store call.
+    code_enforces: No account, order or change tool runs before verification.
+    left_to_model: Asking the customer for their email, or name and zip code.
+    source:
+      - file: fde_agent/tools/get_order.py
+        symbol: _check
+        lines: [52, 63]
+      - file: fde_agent/tools/find_variants.py
+        symbol: _check
+        lines: [58, 64]
+      - file: fde_agent/tools/find_replacement.py
+        symbol: _check
+        lines: [55, 67]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: _check
+        lines: [164, 167]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: _check
+        lines: [121, 123]
+      - file: fde_agent/notes.py
+        symbol: Notes.record_order
+        lines: [78, 85]
+
+  - id: F7
+    name: verify_customer lists every order with status and items
+    status: implemented
+    addresses: [D15, D14]
+    what: >-
+      Verifying the customer also loads every order in one batch. The model sees the
+      account at a glance: default address, payment methods, and every order with its
+      status and items.
+    code_enforces: That no order is left out, and the statuses go into the notes.
+    left_to_model: Matching what the customer describes to one of the orders listed.
+    source:
+      - file: fde_agent/tools/verify_customer.py
+        symbol: verify_customer
+        lines: [68, 118]
+      - file: fde_agent/tools/verify_customer.py
+        symbol: shape
+        lines: [134, 146]
+
+  - id: F8
+    name: Code reads the data
+    status: implemented
+    addresses: [D14]
+    what: >-
+      find_variants filters a product's variants by the options asked for, splits
+      available from unavailable, counts them, and lists the closest available ones
+      when nothing matches. find_replacement keeps every option except those the
+      customer wants changed, and finds that exact variant or the closest ones.
+    code_enforces: >-
+      Filtering, counting, availability and option names and values, which must be
+      real ones of the product.
+    left_to_model: Turning the customer's words into option names and values.
+    source:
+      - file: fde_agent/tools/find_variants.py
+        symbol: resolve_options
+        lines: [118, 136]
+      - file: fde_agent/tools/find_variants.py
+        symbol: match
+        lines: [139, 155]
+      - file: fde_agent/tools/find_replacement.py
+        symbol: pick
+        lines: [116, 130]
+
+  - id: F9
+    name: Possible actions per order status, from the rulebook
+    status: implemented
+    addresses: []
+    what: >-
+      get_order ends with what is possible for the order's status, written by code
+      from policy.md, such as "Changing items can be done only ONCE".
+    code_enforces: The list of actions for each exact store status.
+    left_to_model: Reading it, and telling the customer what can and can't be done.
+    source:
+      - file: fde_agent/tools/get_order.py
+        symbol: possible_actions
+        lines: [90, 114]
+      - file: fde_agent/tools/get_order.py
+        symbol: shape
+        lines: [154, 154]
+
+  - id: F10
+    name: prepare then confirm, with one checker per kind
+    status: implemented
+    addresses: [D11]
+    what: >-
+      prepare_change checks a change against every rule and store check and stores
+      the exact store call, but never writes. confirm_change runs exactly that call,
+      once. Each of the 7 kinds of change has its own checker.
+    code_enforces: >-
+      Status, items, availability, same product, payment and gift card rules before
+      the write; the write is the one the customer saw; no write runs twice.
+    left_to_model: Gathering every detail, and choosing the kind of change.
+    source:
+      - file: fde_agent/tools/prepare_change.py
+        symbol: prepare_change
+        lines: [245, 293]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: CHECKERS
+        lines: [502, 510]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: _check
+        lines: [121, 159]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: confirm_change
+        lines: [164, 182]
+
+  - id: F11
+    name: Code sends the change summary word for word
+    status: implemented
+    addresses: [D11]
+    what: >-
+      After prepare_change succeeds, code sends its summary to the customer itself,
+      marks it shown, and tells the model to wait for the answer. The model is not
+      asked anything until the customer replies. The summary asks ONE question,
+      "Shall I go ahead?": its warnings are statements, because a second question
+      ("Is there any other item...?") drew a "no" that the yes rule refused. It
+      starts with "Nothing has changed yet" and ends with "I'll make the change as
+      soon as you say yes", because a summary that read like a finished change made
+      the customer say yes and end the chat in the same message.
+    code_enforces: The customer sees exactly what will be written.
+    left_to_model: Nothing for the summary itself.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._code_speaks
+        lines: [437, 459]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: NOT_YET
+        lines: [106, 106]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: ASK
+        lines: [107, 107]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: WARN_DELIVERED
+        lines: [96, 100]
+      - file: fde_agent/notes.py
+        symbol: Notes.mark_shown
+        lines: [99, 102]
+
+  - id: F12
+    name: The yes rule in code
+    status: implemented
+    addresses: [D11]
+    what: >-
+      confirm_change only runs when the customer's first message after the summary
+      is a clear yes: a yes word or phrase, no question mark, and no word that
+      narrows or delays it. It only accepts PLAIN yeses: a reply that names an item of
+      the change ("Just go ahead with the desk lamp" to a lamp + water bottle summary),
+      or a payment method the summary doesn't use ("use my gift card"), or says "just",
+      is not a clear yes by the rule. When this rule says no, F19 has the final say.
+    code_enforces: No write without a clear yes to the summary that was shown.
+    left_to_model: Calling confirm_change, or answering a question and asking again.
+    source:
+      - file: fde_agent/tools/confirm_change.py
+        symbol: is_clear_yes
+        lines: [47, 62]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: names_other_payment
+        lines: [82, 86]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: payment_mentions
+        lines: [71, 79]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: item_names
+        lines: [96, 104]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: names_part_of_change
+        lines: [107, 109]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: is_clear_yes_to
+        lines: [112, 116]
+      - file: fde_agent/tools/confirm_change.py
+        symbol: YES_WORDS
+        lines: [39, 40]
+      - file: fde_agent/notes.py
+        symbol: Notes.customer_said
+        lines: [104, 107]
+
+  - id: F13
+    name: The summary lists the other valid payment options
+    status: implemented
+    addresses: []
+    what: >-
+      When a change involves a payment method, the summary also names the customer's
+      other methods that would be valid for it, so the customer sees every option
+      even if the model chose one itself.
+    code_enforces: Which methods are valid, including gift card balances.
+    left_to_model: Asking which method the customer wants.
+    source:
+      - file: fde_agent/tools/prepare_change.py
+        symbol: _alternatives
+        lines: [330, 340]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: _difference_alternatives
+        lines: [343, 348]
+
+  - id: F14
+    name: Checks on every model reply before anything runs
+    status: implemented
+    addresses: [D6, D12, D13, D18]
+    what: >-
+      Every raw reply is checked first: unknown or empty tool names and bad inputs are
+      rejected with an error for the model; junk on a tool name, numbers sent as text
+      and text sent with a tool call are fixed; only the first of several calls runs;
+      broken JSON is caught; a repeat of a failed previous call is answered from its
+      result (a repeat of a successful call: F27).
+    code_enforces: Only a real tool with valid inputs runs. Each fix or rejection is logged.
+    left_to_model: Producing a valid call, and correcting it after an error.
+    source:
+      - file: fde_agent/model_client.py
+        symbol: parse
+        lines: [147, 174]
+      - file: fde_agent/model_client.py
+        symbol: check_args
+        lines: [94, 135]
+      - file: fde_agent/model_client.py
+        symbol: clean_name
+        lines: [86, 91]
+      - file: fde_agent/model_client.py
+        symbol: is_repeat
+        lines: [138, 144]
+      - file: fde_agent/model_client.py
+        symbol: ModelClient.decide
+        lines: [200, 217]
+
+  - id: F15
+    name: A tool error before the store costs no benchmark step
+    status: implemented
+    addresses: [D4, D7]
+    what: >-
+      The driver asks the model again inside the same benchmark turn when a call is
+      rejected or a tool fails before reaching the store. So one turn can hold
+      several model calls. After 5 failing tries in a row, code sends a safe message.
+    code_enforces: The retry loop and the limit of 5.
+    left_to_model: Reading the error and fixing the call.
+    source:
+      - file: fde_agent/driver.py
+        symbol: MAX_FAILED_TRIES
+        lines: [48, 48]
+      - file: fde_agent/driver.py
+        symbol: Driver._think
+        lines: [191, 303]
+      - file: fde_agent/driver.py
+        symbol: Driver._finish
+        lines: [343, 357]
+
+  - id: F16
+    name: Checks on every message the model writes
+    status: implemented
+    addresses: []
+    what: >-
+      Before a model-written message reaches the customer, bold markers are removed
+      and a message showing internal IDs (item_, product_, payment IDs) is not sent:
+      the model is asked to rewrite it. Empty replies are refused the same way.
+    code_enforces: No internal ID and no bold reaches the customer from the model.
+    left_to_model: Rewriting the message.
+    source:
+      - file: fde_agent/outgoing.py
+        symbol: INTERNAL_ID
+        lines: [14, 15]
+      - file: fde_agent/outgoing.py
+        symbol: strip_bold
+        lines: [23, 25]
+      - file: fde_agent/driver.py
+        symbol: Driver._think
+        lines: [214, 242]
+
+  - id: F17
+    name: Transfer rules in code
+    status: implemented
+    addresses: [D17]
+    what: >-
+      transfer_to_human works once, gives one reminder when a change is prepared but
+      not done, puts the verified customer in front of the summary, and code then
+      sends the exact transfer sentence. After it, every tool refuses.
+    code_enforces: Once only, the reminder, the exact closing sentence.
+    left_to_model: Deciding that a transfer is justified.
+    source:
+      - file: fde_agent/tools/transfer_to_human.py
+        symbol: TRANSFER_MESSAGE
+        lines: [22, 22]
+      - file: fde_agent/tools/transfer_to_human.py
+        symbol: transfer_to_human
+        lines: [40, 69]
+      - file: fde_agent/notes.py
+        symbol: Notes.check_open
+        lines: [59, 63]
+      - file: fde_agent/driver.py
+        symbol: Driver._code_speaks
+        lines: [457, 458]
+
+  - id: F18
+    name: The agent's own per-conversation log
+    status: implemented
+    addresses: []
+    what: >-
+      Every internal step is an event in fde_agent_log.json, next to the
+      conversation's llm_debug folder: each model call, tool call and result, store
+      call, note, message (with who wrote it) and check. It is rewritten after every
+      turn, so it can be read while a run is going.
+    code_enforces: That every step is logged, in order, with a number and a time.
+    left_to_model: Nothing.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._record
+        lines: [467, 468]
+      - file: fde_agent/agent.py
+        symbol: write_log
+        lines: [124, 164]
+      - file: fde_agent/LOG_FORMAT.md
+        lines: [1, 55]
+
+  - id: F19
+    name: A second yes check, by a model without the conversation
+    status: implemented
+    addresses: [D11]
+    what: >-
+      When the yes rule (F12) refuses the customer's reply, confirm_change asks a
+      model one question with no conversation: only the summary the customer saw
+      and their reply. Only a plain YES lets the change go ahead. A reply the rule
+      accepts never reaches the model. Any other answer, or a failed call, is a no,
+      and the agent asks the customer again.
+    code_enforces: >-
+      When the model is asked, what it sees, that only YES counts and that a failure
+      is a no. Every check is logged (yes_check) and its tokens count in the turn.
+    left_to_model: Reading a real yes that the word rule refuses, like "No other items, go ahead".
+    source:
+      - file: fde_agent/tools/confirm_change.py
+        symbol: _check
+        lines: [143, 151]
+      - file: fde_agent/yes_check.py
+        symbol: INSTRUCTION
+        lines: [17, 26]
+      - file: fde_agent/yes_check.py
+        symbol: read_answer
+        lines: [48, 50]
+      - file: fde_agent/yes_check.py
+        symbol: YesChecker.check
+        lines: [61, 70]
+      - file: fde_agent/driver.py
+        symbol: Driver._check_yes
+        lines: [369, 382]
+
+  - id: F20
+    name: Only confirm_change while a yes is waiting
+    status: implemented
+    addresses: [D11, D15]
+    what: >-
+      When the customer has given a clear yes to the change on screen, the next step
+      must be confirm_change. Any other tool is not run and a message to the customer
+      is not sent: the model is told to confirm first and do the rest after. A new
+      prepared change would replace the shown one and throw the yes away, and a message
+      could claim the change is done when it isn't ("Your return has been requested").
+      But the word rule can misread a yes, so when it says yes and the model wants to do
+      something else, the yes-checker (F19) decides: a real yes is still enforced; if it
+      isn't one, the model's step goes ahead. The verdict stands for that reply.
+    code_enforces: >-
+      A clear yes is never thrown away, and nothing is said or done until it is confirmed.
+      Refused before any store call.
+    left_to_model: Calling confirm_change after the refusal.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._yes_waiting
+        lines: [390, 398]
+      - file: fde_agent/driver.py
+        symbol: Driver._really_yes
+        lines: [400, 411]
+      - file: fde_agent/driver.py
+        symbol: YES_WAITING
+        lines: [53, 54]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: _no_yes_waiting
+        lines: [229, 242]
+
+  - id: F21
+    name: A reminder while a change is waiting
+    status: implemented
+    addresses: [D15]
+    what: >-
+      When the customer replies to a summary with anything the yes rule doesn't read as
+      a clear yes (a side question, a change, an unclear answer), code tells the model
+      the change is still waiting: confirm it if they agreed, answer a question and ask
+      again, or prepare it again if they want something different.
+    code_enforces: The model is told, every time, that a shown change is still open.
+    left_to_model: Which of the three it is, and asking again after answering.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._remind_waiting_change
+        lines: [359, 367]
+      - file: fde_agent/driver.py
+        symbol: WAITING_NOTE
+        lines: [64, 67]
+
+  - id: F22
+    name: Code tells the customer a change is done
+    status: implemented
+    addresses: [D14]
+    what: >-
+      After confirm_change succeeds, code sends the customer "Done. This change is made:"
+      with the change as it was summarised (without the warnings and the question) and
+      the order's new status from the store's own answer. The model is not asked until
+      the customer replies, so it can't misdescribe the change or repeat confirm_change.
+    code_enforces: What the customer is told about a finished change is what the store did.
+    left_to_model: Everything after the customer's next message.
+    source:
+      - file: fde_agent/tools/confirm_change.py
+        symbol: done_text
+        lines: [185, 192]
+      - file: fde_agent/tools/prepare_change.py
+        symbol: core_lines
+        lines: [115, 121]
+      - file: fde_agent/driver.py
+        symbol: Driver._code_speaks
+        lines: [450, 456]
+
+  - id: F23
+    name: Identity values must come from the customer
+    status: implemented
+    addresses: [D3]
+    what: >-
+      Every name, zip code and email given to verify_customer must appear in something
+      the customer said (ignoring case and spaces). Otherwise it is not run, and the
+      model is told to ask the customer and never guess.
+    code_enforces: No store lookup with an invented identity ("John Doe, 90210").
+    left_to_model: Asking for the details.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._ungrounded
+        lines: [431, 435]
+      - file: fde_agent/driver.py
+        symbol: UNGROUNDED
+        lines: [59, 60]
+
+  - id: F24
+    name: The same product in other orders is pointed out
+    status: implemented
+    addresses: [D15]
+    what: >-
+      When an item change, return or exchange is prepared, the result for the model
+      lists the customer's other orders (in the status that kind needs) that have the
+      same product, so a request for "all of them" isn't half done. The customer's
+      summary is unchanged, and the model is told not to change them without asking.
+    code_enforces: Which other orders have the same product, from the order data.
+    left_to_model: Whether the customer meant them, and preparing them.
+    source:
+      - file: fde_agent/tools/prepare_change.py
+        symbol: same_product_elsewhere
+        lines: [131, 144]
+      - file: fde_agent/notes.py
+        symbol: Notes.record_order
+        lines: [78, 85]
+
+  - id: F25
+    name: Verifying the same customer again reloads nothing
+    status: implemented
+    addresses: [D13]
+    what: >-
+      If the customer is verified again and nothing has been changed since, only the
+      lookup runs; their account and orders are given back from the first time. After
+      a change, everything is loaded again.
+    code_enforces: No repeated loading of the same account.
+    left_to_model: Nothing.
+    source:
+      - file: fde_agent/tools/verify_customer.py
+        symbol: verify_customer
+        lines: [68, 118]
+
+  - id: F26
+    name: The model sees a clean history
+    status: implemented
+    addresses: [D7, D8]
+    what: >-
+      Once the model has recovered from a failed step (a later tool call worked, or a
+      message reached the customer), the failed calls, their errors and the notes about
+      rejected replies are left out of what it sees. An error that states a fact about
+      the store or the rules is kept as a short note. Every tool error says whether it
+      is a fact. Customer messages, successes and code's notes always stay; the log
+      keeps everything and counts what was hidden.
+    code_enforces: The model doesn't see its own old mistakes, but keeps what they taught.
+    left_to_model: Nothing.
+    source:
+      - file: fde_agent/driver.py
+        symbol: model_view
+        lines: [482, 506]
+      - file: fde_agent/errors.py
+        symbol: ToolError
+        lines: [15, 18]
+
+  - id: F27
+    name: An identical call is not run again
+    status: implemented
+    addresses: [D13]
+    what: >-
+      A call with exactly the same inputs (ignoring empty ones) as an earlier successful
+      call since the last change made is not run: the model is pointed to that result.
+      After a change, reading again is allowed. prepare_change is only refused when it
+      is the same as the change on screen. Counts as a failed try.
+    code_enforces: No repeated store calls for something the model already has.
+    left_to_model: Using the earlier result.
+    source:
+      - file: fde_agent/driver.py
+        symbol: Driver._duplicate
+        lines: [413, 429]
+      - file: fde_agent/driver.py
+        symbol: _inputs
+        lines: [473, 475]
+
+# Decisions suggested when a label is added on a task. They can be changed per task.
+label_links:
+  wrong-variant-choice: [F8, F5]
+  misread-tool-output: [F8, F7, F9, F22]
+  incomplete-lookup: [F7, F5, F17, F24]
+  malformed-tool-call: [F14, F15, F4, F26, F27]
+  ignored-customer-change: [F5, F10, F21]
+  skipped-identity-check: [F6, F23]
+  unconfirmed-write: [F10, F11, F12, F19, F20]
+  setup-problem: []
+  attempted-policy-violation: [F10, F9]
+  assumed-customer-detail: [F1, F13, F12, F23]
+
+# Generated with: uv run --project trace_viewer python -m viewer.designs v1-fde-agent
+source_hashes:
+  fde_agent/LOG_FORMAT.md: e215559b9877928558588c01771610a02428bcbc9712e9892fe0a2e519eadc23
+  fde_agent/agent.py: 277a75207e30e6d7dac4f1efd123efe1859ddd1ebc8a0a9f6ea1d547da569107
+  fde_agent/driver.py: aba4312055c7a97a381a74b869b842fb33a808bf37e094a5a9c09071c4772ebd
+  fde_agent/errors.py: 8a8de4d6af292bdcf24870581132f2b3af0b5ce65a06462af8fa1fde6da7b2c8
+  fde_agent/ids.py: 74d687994d4d358dd3b1d1a1bb04f7842ee7ceb67f5f56a9d08a4fffc0a7f9d7
+  fde_agent/instructions.md: c7df1aa76ef11e0d4071d3668b44ff58d9078ab9e80603f82c62626cd5b32e6e
+  fde_agent/model_client.py: 8eca63fa9d2c6aa166d22933eade72b00528b18bb569ed96ecda95f29fcb31d5
+  fde_agent/notes.py: 387f1e310da69fc586fdf0b8c625418a724c8c31215947b07fad3ba35212dd55
+  fde_agent/outgoing.py: f5bc8c40b828acc397f0734914bd3e8ad2eb8282a26d285de5affe5b08028608
+  fde_agent/policy_coverage.py: 5310f2a6912112f365e707e457b79498c21cb3e1e8696b053aee6ef158de03c4
+  fde_agent/prompt.py: e681135bac1cdee64bd5f8ea5574ce625be3672fbe73718f5b3869efb99a0ec1
+  fde_agent/store.py: 97f8e879eb56bc28ed417f484fb8a8390024255f0935c0d70bf39407ba165be1
+  fde_agent/tools/confirm_change.py: 3bca4fc9ae44d3ccba4e6b1a919d0445fbabb98b59f9d4840ee2917e542c14be
+  fde_agent/tools/find_replacement.py: 8ce20e3e3f942c34935de3aadc1037535908b156c8d9546926bbebab0da550cd
+  fde_agent/tools/find_variants.py: 933b3d83d884a5731a3e450c3c84fd71398565f891806e5dc4fcf127e7d0521e
+  fde_agent/tools/get_order.py: 6a39d4766aaf59a484aa6487f7d5a145cc33baddc3f354b4fb0ec1e7cf2290d1
+  fde_agent/tools/prepare_change.py: 2b50411983a4d54556a27a2a95cbd40134c871e420e32bcac9284346467aa973
+  fde_agent/tools/transfer_to_human.py: d4e55f074982b7873009988fc3823a058880b5659b82521cfc61f65932a5c88a
+  fde_agent/tools/verify_customer.py: 4cec5e13ed979fb0e0249d66b5e042dfc668b7025eb2945f0f682a09adf7ed25
+  fde_agent/toolset.py: cb260b5594f46b13fff71375e4011480c5374cffbcb66cf189f939d196eefb02
+  fde_agent/yes_check.py: 9280a9427ab5a5126be047f93d942a58d8dd6f7022f1e2e034306f6ccf00f5af
+
+# The 7 tools exactly as sent to the model, from each module's NAME, DESCRIPTION and
+# PARAMETERS. Kind: write if it can write to the store, generic for the transfer.
+tools:
+- name: verify_customer
+  kind: read
+  description: 'Verify the customer''s identity. Do this before anything else. Give EITHER
+    their email, OR their first name, last name and zip code. Returns their account: default
+    address, payment methods, and all orders with status and items.'
+  parameters:
+    type: object
+    properties:
+      email:
+        type: string
+        description: Customer's email.
+      first_name:
+        type: string
+      last_name:
+        type: string
+      zip:
+        type: string
+        description: Zip code of the customer's address.
+    required: []
+- name: get_order
+  kind: read
+  description: 'Show full details of one of the verified customer''s orders: items with item
+    IDs, product IDs and prices, payments, tracking, and which actions are possible for the
+    order''s current status.'
+  parameters:
+    type: object
+    properties:
+      order_id:
+        type: string
+        description: 'Order ID, e.g. #W2378156.'
+    required:
+    - order_id
+- name: find_variants
+  kind: read
+  description: 'Find the variants (item options) of a product, e.g. all T-shirts, or only
+    blue ones in size L. Give product_id (from get_order) or product_name. Optionally give
+    the options the customer wants, e.g. {"color": "blue", "size": "L"}. Shows which variants
+    are available, their item IDs and prices, and the closest alternatives when nothing available
+    matches.'
+  parameters:
+    type: object
+    properties:
+      product_id:
+        type: string
+        description: Product ID, e.g. product_9523456873.
+      product_name:
+        type: string
+        description: Product name, e.g. T-Shirt.
+      options:
+        type: object
+        description: Option name -> wanted value.
+        additionalProperties:
+          type: string
+    required: []
+- name: find_replacement
+  kind: read
+  description: 'Find the replacement for an item in one of the customer''s orders, keeping
+    everything the same except the options the customer wants changed. Give order_id, item_id
+    (from get_order) and changes, e.g. {"color": "blue"}. Shows the replacement item ID, whether
+    it is available, the price difference, and the closest available options if not.'
+  parameters:
+    type: object
+    properties:
+      order_id:
+        type: string
+        description: 'Order ID, e.g. #W2378156.'
+      item_id:
+        type: string
+        description: The item to replace, e.g. item_1151293680.
+      changes:
+        type: object
+        description: 'Only the options to change: name -> new value.'
+        additionalProperties:
+          type: string
+    required:
+    - order_id
+    - item_id
+    - changes
+- name: prepare_change
+  kind: read
+  description: 'Prepare a change to an order or to the customer''s default address. This does
+    NOT make the change: it checks it and returns a summary to read to the customer. Only
+    after the customer clearly says yes, call confirm_change with the change number. Pick
+    one kind and give only its inputs:
+
+    - cancel_order: needs order_id, reason. Example: {"kind": "cancel_order", "order_id":
+    "#W6247578", "reason": "no longer needed"}
+
+    - change_order_address: needs order_id, address. Example: {"kind": "change_order_address",
+    "order_id": "#W6247578", "address": {"address1": "12 Main St", "address2": "Apt 4", "city":
+    "Austin", "state": "TX", "country": "USA", "zip": "78701"}}
+
+    - change_order_payment: needs order_id, payment_method_id. Example: {"kind": "change_order_payment",
+    "order_id": "#W6247578", "payment_method_id": "gift_card_1234567"}
+
+    - change_order_items: needs order_id, items, payment_method_id. Example: {"kind": "change_order_items",
+    "order_id": "#W6247578", "items": [{"item_id": "item_3799046073", "new_item_id": "item_2060066974"}],
+    "payment_method_id": "credit_card_9513926"}
+
+    - return_items: needs order_id, item_ids, payment_method_id. Example: {"kind": "return_items",
+    "order_id": "#W2378156", "item_ids": ["item_1151293680"], "payment_method_id": "credit_card_9513926"}
+
+    - exchange_items: needs order_id, items, payment_method_id. Example: {"kind": "exchange_items",
+    "order_id": "#W2378156", "items": [{"item_id": "item_4983901480", "new_item_id": "item_7747408585"}],
+    "payment_method_id": "credit_card_9513926"}
+
+    - change_default_address: needs address. Example: {"kind": "change_default_address", "address":
+    {"address1": "12 Main St", "address2": "", "city": "Austin", "state": "TX", "country":
+    "USA", "zip": "78701"}}
+
+    For change_order_items and exchange_items, put EVERY item in one call: each order allows
+    this only once. item_id / new_item_id come from get_order / find_replacement / find_variants.
+    payment_method_id comes from verify_customer.'
+  parameters:
+    type: object
+    properties:
+      kind:
+        type: string
+        enum:
+        - cancel_order
+        - change_order_address
+        - change_order_payment
+        - change_order_items
+        - return_items
+        - exchange_items
+        - change_default_address
+      order_id:
+        type: string
+      reason:
+        type: string
+        enum:
+        - no longer needed
+        - ordered by mistake
+      items:
+        type: array
+        items:
+          type: object
+          properties:
+            item_id:
+              type: string
+            new_item_id:
+              type: string
+          required:
+          - item_id
+          - new_item_id
+      item_ids:
+        type: array
+        items:
+          type: string
+      payment_method_id:
+        type: string
+      address:
+        type: object
+        properties:
+          address1:
+            type: string
+          address2:
+            type: string
+          city:
+            type: string
+          state:
+            type: string
+          country:
+            type: string
+          zip:
+            type: string
+    required:
+    - kind
+- name: confirm_change
+  kind: write
+  description: Make a prepared change, after the customer has clearly said yes to its summary.
+    Give the change number from prepare_change. If the customer wants anything different,
+    call prepare_change again instead.
+  parameters:
+    type: object
+    properties:
+      change_number:
+        type: integer
+        description: e.g. 1
+    required:
+    - change_number
+- name: transfer_to_human
+  kind: generic
+  description: Transfer the customer to a human agent. This ENDS the conversation. Use it
+    only when (a) the customer asks for a human, supervisor or representative, or (b) they
+    need something no tool can do, e.g. undo a cancellation. If a request is against the rules
+    (e.g. a refund to a different card), first explain that it can't be done; transfer only
+    if they then ask for a human. Before transferring, finish everything the customer already
+    agreed to. Give a short summary of the customer's issue.
+  parameters:
+    type: object
+    properties:
+      summary:
+        type: string
+        description: The customer's issue, in one or two sentences.
+    required:
+    - summary

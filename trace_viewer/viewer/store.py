@@ -16,6 +16,10 @@ tests/stress_live_save.py measures this. What it showed, and the rules that foll
 
 Run start and resume write the file in place, so a read can also see partial JSON.
 In that case the last good copy keeps being served until the next change.
+
+fde_agent rewrites its own log, fde_agent_log.json, the same way after every turn,
+and a failed swap there crashes the agent's turn. Store.read_settled reads such files
+by the same rules.
 """
 
 import json
@@ -36,6 +40,7 @@ SETTLE_SECONDS = 1.0
 SAVE_WAIT_SECONDS = 2.0
 SAVE_POLL_SECONDS = 0.02
 MAX_PARSED_RUNS = 4
+MAX_SETTLED_FILES = 32
 
 Signature = tuple[int, int]
 
@@ -54,8 +59,14 @@ class LoadedRun:
 
 class Scan(NamedTuple):
     signature: Signature | None
-    age_seconds: float  # Since results.json last changed.
+    age_seconds: float  # Since the file last changed.
     saving: bool  # A save's temp file exists.
+
+
+class SettledRead(NamedTuple):
+    data: Any  # The newest copy safe to read, or None if there is none yet.
+    stale: bool  # A newer version exists that is not safe to open yet.
+    problem: str | None
 
 
 def read_json_file(path: Path) -> Any:
@@ -69,26 +80,31 @@ def read_json_file(path: Path) -> Any:
     return json.loads(text)
 
 
-def scan_results(run_dir: Path) -> Scan:
-    """Look at results.json through the folder listing alone.
+def scan_file(folder: Path, name: str, temp_prefix: str) -> Scan:
+    """Look at a file that is replaced by write-then-rename, from the folder listing.
 
-    Never replace this with Path.stat() or Path.exists() on results.json: those
-    open a handle, which can break a save in a live run.
+    Never replace this with Path.stat() or Path.exists() on the file: those open a
+    handle, which can break a save in a live run.
     """
     signature = None
     age = 0.0
     saving = False
     now = time.time()
-    with os.scandir(run_dir) as entries:
+    with os.scandir(folder) as entries:
         for entry in entries:
-            if entry.name == RESULTS_FILE:
+            if entry.name == name:
                 stat = entry.stat(follow_symlinks=False)
                 signature = (stat.st_mtime_ns, stat.st_size)
                 age = now - stat.st_mtime
-            elif entry.name.startswith(SAVE_TEMP_PREFIX):
+            elif entry.name.startswith(temp_prefix):
                 modified = entry.stat(follow_symlinks=False).st_mtime
                 saving = saving or now - modified < ABANDONED_SAVE_SECONDS
     return Scan(signature, age, saving)
+
+
+def scan_results(run_dir: Path) -> Scan:
+    """Look at results.json through the folder listing alone."""
+    return scan_file(run_dir, RESULTS_FILE, SAVE_TEMP_PREFIX)
 
 
 def has_results(run_dir: Path) -> bool:
@@ -114,6 +130,7 @@ class Store:
         self._runs: OrderedDict[str, LoadedRun] = OrderedDict()
         self._invalid: dict[str, tuple[Signature, str]] = {}
         self._memo: dict[tuple[str, str], tuple[Signature, Any]] = {}
+        self._settled: OrderedDict[Path, tuple[Signature, Any]] = OrderedDict()
 
     def run_names(self) -> list[str]:
         if not self.simulations_dir.is_dir():
@@ -151,7 +168,7 @@ class Store:
             if not is_safe_to_open(scan, self.settle_seconds):
                 if cached is not None:
                     return cached  # A later request picks up the new version.
-                scan = self._wait_until_safe(run_dir)
+                scan = self._wait_until_safe(lambda: scan_results(run_dir))
                 if not is_safe_to_open(scan, self.settle_seconds):
                     return self._fallback(
                         name, None, scan.signature, "A save is in progress."
@@ -173,15 +190,49 @@ class Store:
             self._memo[(name, key)] = (signature, value)
         return value
 
-    def _wait_until_safe(self, run_dir: Path) -> Scan:
+    def read_settled(self, path: Path, temp_prefix: str) -> SettledRead:
+        """Read a JSON file that a live process replaces by write-then-rename.
+
+        The same rules as results.json: changes are seen in the folder listing, and
+        the file is opened only once it has been quiet and no temp file exists.
+        Until then the last good copy is served, marked stale.
+        """
+        scan = scan_file(path.parent, path.name, temp_prefix)
+        if scan.signature is None:
+            return SettledRead(None, False, f"{path.name} does not exist yet.")
+        with self._lock:
+            cached = self._settled.get(path)
+        if cached is not None and cached[0] == scan.signature:
+            return SettledRead(cached[1], False, None)
+        if not is_safe_to_open(scan, self.settle_seconds):
+            if cached is not None:
+                return SettledRead(cached[1], True, None)
+            scan = self._wait_until_safe(
+                lambda: scan_file(path.parent, path.name, temp_prefix)
+            )
+            if not is_safe_to_open(scan, self.settle_seconds):
+                return SettledRead(None, True, f"{path.name} is being written.")
+        try:
+            data = read_json_file(path)
+        except (OSError, ValueError) as error:
+            old = cached[1] if cached is not None else None
+            return SettledRead(old, True, f"{path.name} could not be read: {error}")
+        with self._lock:
+            self._settled[path] = (scan.signature, data)
+            self._settled.move_to_end(path)
+            while len(self._settled) > MAX_SETTLED_FILES:
+                self._settled.popitem(last=False)
+        return SettledRead(data, False, None)
+
+    def _wait_until_safe(self, rescan: Callable[[], Scan]) -> Scan:
         deadline = time.monotonic() + self.settle_seconds + SAVE_WAIT_SECONDS
-        scan = scan_results(run_dir)
+        scan = rescan()
         while (
             not is_safe_to_open(scan, self.settle_seconds)
             and time.monotonic() < deadline
         ):
             time.sleep(SAVE_POLL_SECONDS)
-            scan = scan_results(run_dir)
+            scan = rescan()
         return scan
 
     def _read(

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from viewer import annotations, checks, compare, designs, pages, runmeta
+from viewer import agent_log, annotations, checks, compare, designs, pages, runmeta
 from viewer.annotations import Annotations, task_key
 from viewer.artifacts import find_saved_agent_call
 from viewer.designs import Designs
@@ -48,6 +48,18 @@ def _run_design(ctx: Context, name: str, info: dict, meta: dict | None) -> dict:
 
 
 def _tool_schemas(ctx: Context, name: str, design: dict | None) -> dict | None:
+    """The schemas of the tool calls in results.json, for the invalid-call check.
+
+    For most agents those are the tools the model was sent. An agent with its own
+    tools sends the store's calls itself, so its design names the design whose tool
+    list is the store's (`store_tools_from`).
+    """
+    source = (design or {}).get("store_tools_from")
+    if source:
+        try:
+            return checks.tool_schemas_from_call(ctx.designs.get(source).get("tools"))
+        except designs.UnknownDesign:
+            return None
     call = _saved_call(ctx, name)
     tools = ((call or {}).get("request") or {}).get("tools")
     return checks.tool_schemas_from_call(tools or (design or {}).get("tools"))
@@ -109,6 +121,7 @@ def run_view(ctx: Context, name: str) -> dict[str, Any]:
     schemas = _tool_schemas(ctx, name, design)
     sims = _simulations(ctx, name)
     tasks = ctx.notes.read(name)
+    one_trial = (info.get("num_trials") or 1) == 1
 
     for row in page["rows"]:
         sim = sims.get((row["task_id"], row["trial"]))
@@ -119,6 +132,10 @@ def run_view(ctx: Context, name: str) -> dict[str, Any]:
             }
         entry = tasks.get(task_key(row["task_id"], row["trial"])) or {}
         row["labels"] = [item["id"] for item in entry.get("labels") or []]
+        row["agent"] = pages.task_counts(
+            ctx.store, run_dir, row["task_id"], sim, fallback=one_trial
+        )
+    page["agent_totals"] = _agent_totals(page["rows"])
 
     labels, labels_problem = _labels(ctx)
     page["check_definitions"] = checks.DEFINITIONS
@@ -130,6 +147,23 @@ def run_view(ctx: Context, name: str) -> dict[str, Any]:
         "origin": found["origin"],
     }
     return page
+
+
+def _agent_totals(rows: list[dict]) -> dict[str, Any]:
+    """A run's totals of the per-task counts, kept apart by where they came from."""
+    counted = [row["agent"] for row in rows if row.get("agent")]
+    logged = [c for c in counted if c["source"] == "agent_log"]
+    totals: dict[str, Any] = {}
+    for counts in logged:
+        agent_log.add_counts(totals, {k: v for k, v in counts.items() if k != "sim_id"})
+    return {
+        "tasks": len(counted),
+        "tasks_with_log": len(logged),
+        "tasks_not_in_results": sum(1 for c in counted if not c["in_results"]),
+        "model_calls": sum(c.get("model_calls") or 0 for c in counted),
+        "benchmark_steps": sum(c.get("benchmark_steps") or 0 for c in counted),
+        "log": totals or None,
+    }
 
 
 def _labels(ctx: Context) -> tuple[list[dict], str | None]:
@@ -145,13 +179,20 @@ def _label_links(design: dict | None) -> dict:
 
 def _brief_decisions(design: dict | None) -> list[dict]:
     return [
-        {"id": d["id"], "name": d["name"], "status": d["status"]}
+        {
+            "id": d["id"],
+            "name": d["name"],
+            "status": d["status"],
+            "addresses": d.get("addresses") or [],
+        }
         for d in (design or {}).get("decisions") or []
     ]
 
 
-def task_view(ctx: Context, name: str, task_id: str, trial: int) -> dict[str, Any]:
-    page = pages.task_page(ctx.store, name, task_id, trial)
+def task_view(
+    ctx: Context, name: str, task_id: str, trial: int, attempt: str | None = None
+) -> dict[str, Any]:
+    page = pages.task_page(ctx.store, name, task_id, trial, attempt)
     meta = runmeta.read_meta(ctx.store.run_dir(name))
     info = _load_info(ctx, name)
     design = _run_design(ctx, name, info, meta)["design"]
@@ -277,6 +318,8 @@ def compare_view(ctx: Context, first: str, second: str) -> dict[str, Any]:
             )
         except designs.UnknownDesign:
             pass
+    if difference and difference.get("mapping"):
+        _add_linked_failures(difference["mapping"], old, new, old_design)
     return {
         "first": _compare_side(first, old),
         "second": _compare_side(second, new),
@@ -284,6 +327,35 @@ def compare_view(ctx: Context, first: str, second: str) -> dict[str, Any]:
         "check_definitions": checks.DEFINITIONS,
         "design_difference": difference,
     }
+
+
+def _linked(page: dict) -> dict[str, list[dict]]:
+    """Failed tasks per design decision, from the run's failure labels."""
+    return {
+        bucket["id"]: bucket["failures"]
+        for bucket in (page.get("analysis") or {}).get("by_decision") or []
+    }
+
+
+def _add_linked_failures(mapping: dict, old: dict, new: dict, old_design: str) -> None:
+    """Beside each base decision: the failures each run linked to it, or to what
+    replaced it. This compares runs whose designs use different decision ids."""
+    base_page, other_page = (old, new) if mapping["base"] == old_design else (new, old)
+    base_links, other_links = _linked(base_page), _linked(other_page)
+    for row in mapping["rows"]:
+        row["base_failures"] = base_links.get(row["id"], [])
+        seen, failures = set(), []
+        for replacement in row["replaced_by"]:
+            for task in other_links.get(replacement["id"], []):
+                key = (task["task_id"], task["trial"])
+                if key not in seen:
+                    seen.add(key)
+                    failures.append(task)
+        row["other_failures"] = failures
+    for decision in mapping["new"]:
+        decision["other_failures"] = other_links.get(decision["id"], [])
+    mapping["base_run"] = base_page["summary"]["name"]
+    mapping["other_run"] = other_page["summary"]["name"]
 
 
 def _compare_side(name: str, page: dict) -> dict[str, Any]:
@@ -295,6 +367,8 @@ def _compare_side(name: str, page: dict) -> dict[str, Any]:
         "design_origin": (page.get("design") or {}).get("origin"),
         "note": (page.get("recorded") or {}).get("note"),
         "problem": page["summary"].get("problem"),
+        "agent": (page["summary"].get("agent") or {}).get("implementation"),
+        "agent_totals": page.get("agent_totals"),
     }
 
 

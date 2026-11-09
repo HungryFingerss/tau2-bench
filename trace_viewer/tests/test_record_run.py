@@ -103,6 +103,82 @@ def test_the_command_is_uv_run_tau2_with_the_flags_that_keep_raw_calls(
     assert option_value(command, "--llm-log-mode") == "all"
 
 
+FDE = ["--design", "v1-fde-agent", "--note", "smoke"]
+FDE_START = ["uv", "run", "python", "-m", "fde_agent.run", "run"]
+FDE_TAU2 = ["--", "--domain", "retail", "--agent", "fde_agent", "--agent-llm", "model"]
+
+
+def test_fde_agent_design_starts_its_own_runner_with_the_same_flags(tmp_path, fake_git):
+    _, benchmark = run(tmp_path, *FDE, "--name", "fde-run", *FDE_TAU2)
+    command = benchmark.calls[0]["command"]
+    assert command[:6] == FDE_START
+    assert command[6:12] == FDE_TAU2[1:]
+    assert option_value(command, "--save-to") == "fde-run"
+    assert "--verbose-logs" in command
+    assert option_value(command, "--llm-log-mode") == "all"
+    assert benchmark.calls[0]["cwd"] == record_run.REPO_ROOT
+    assert benchmark.calls[0]["env"]["UV_FROZEN"] == "1"
+
+
+def test_fde_agent_run_records_its_design_command_and_heartbeat(tmp_path, fake_git):
+    run(tmp_path, *FDE, "--name", "fde-run", *FDE_TAU2)
+    session = meta_of(tmp_path, "fde-run")["sessions"][0]
+    assert session["design_version"] == "v1-fde-agent"
+    assert session["command"][:6] == FDE_START
+    assert "fde_agent.run run" in session["command_line"]
+    assert {p.name for p in (tmp_path / "fde-run").iterdir()} == {
+        runmeta.DIFF_FILE,
+        runmeta.META_FILE,
+        runmeta.HEARTBEAT_FILE,
+    }
+
+
+def test_fde_agent_design_still_needs_its_agent(tmp_path, fake_git):
+    message = refused(tmp_path, *FDE, *TAU2)
+    assert "is for fde_agent, not llm_agent" in message
+
+
+def test_the_entry_point_comes_from_the_design_not_the_agent_name(tmp_path, fake_git):
+    """A design for some other agent can name any command, and that one is used."""
+    designs = Designs(tmp_path / "designs")
+    (tmp_path / "designs").mkdir()
+    source = (Designs().directory / "v0-baseline.yaml").read_text(encoding="utf-8")
+    text = source.replace("version: v0-baseline", "version: v9-other")
+    text = text.replace(
+        "agent_implementation: llm_agent",
+        "agent_implementation: my_agent\nentry_point: [python, my_runner.py]",
+    )
+    (tmp_path / "designs" / "v9-other.yaml").write_text(text, encoding="utf-8")
+    benchmark = FakeBenchmark()
+    record(
+        [
+            "--design",
+            "v9-other",
+            "--note",
+            "x",
+            "--name",
+            "r",
+            "--",
+            "--agent",
+            "my_agent",
+        ],
+        tmp_path / "sims",
+        designs,
+        benchmark,
+    )
+    assert benchmark.calls[0]["command"][:4] == [
+        "python",
+        "my_runner.py",
+        "--agent",
+        "my_agent",
+    ]
+
+
+def test_build_command_defaults_to_tau2():
+    assert build_command([], "r", False)[:4] == ["uv", "run", "tau2", "run"]
+    assert build_command([], "r", False, ["x", "y"])[:2] == ["x", "y"]
+
+
 def test_root_lock_is_protected(tmp_path, fake_git, monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", "somewhere")
     _, benchmark = run(tmp_path, *BASE, *TAU2)

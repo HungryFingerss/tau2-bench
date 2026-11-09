@@ -148,8 +148,10 @@ def create_app(
         return insight.meta_view(ctx, run)
 
     @app.get("/api/runs/{run}/tasks/{task_id}")
-    def task(run: str, task_id: str, trial: int = 0) -> dict:
-        return insight.task_view(ctx, run, task_id, trial)
+    def task(
+        run: str, task_id: str, trial: int = 0, attempt: str | None = None
+    ) -> dict:
+        return insight.task_view(ctx, run, task_id, trial, attempt)
 
     @app.post("/api/runs/{run}/tasks/{task_id}/annotation")
     def annotate(run: str, task_id: str, body: AnnotationInput, trial: int = 0) -> dict:

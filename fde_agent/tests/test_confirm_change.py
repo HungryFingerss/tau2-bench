@@ -66,7 +66,7 @@ def test_cancel_confirmed(yusuf, env):
     yusuf.customer_said("Yes.")
     out = confirm(yusuf, env, n)
     assert out.ok
-    assert out.text == "Done: change #1 on order #W6247578. Order status is now 'cancelled'. Tell the customer it's done."
+    assert out.text == "Done: change #1 on order #W6247578. Order status is now 'cancelled'. Code has told the customer."
     assert [c.name for c in out.calls] == ["cancel_pending_order"]
     assert read(env, "get_order_details", order_id="#W6247578")["status"] == "cancelled"
     assert yusuf.orders["#W6247578"] == "cancelled"
@@ -177,6 +177,7 @@ def test_number_as_text(yusuf, env):
 @pytest.mark.parametrize("reply", [
     "Yes.", "yes", "Yes please.", "Yes, go ahead.", "Okay.", "Sure, go ahead with it.",
     "Yes, that's correct.", "Please do.", "Confirm.", "Yep, sounds good!", "Yes, that’s correct.",
+    "Yes, it's no longer needed.", "Yes, go ahead, no longer needed.", "Yes please, it was ordered by mistake.",
 ])
 def test_clear_yes(reply):
     assert is_clear_yes(reply)
@@ -187,6 +188,8 @@ def test_clear_yes(reply):
     "Yes, but only the lamp.", "Yes, how long does the refund take?", "Wait, let me check.",
     "Actually, change the size instead.", "I don't want that.", "I don’t want that.", "Hmm, let me think",
     "No problem, go ahead",   # false refusal, on purpose: the model asks again
+    "No, it's no longer needed but don't cancel yet.", "no longer needed",   # no yes-word at all
+    "Yes, but no longer needed for the second one.",
 ])
 def test_not_clear_yes(reply):
     assert not is_clear_yes(reply)

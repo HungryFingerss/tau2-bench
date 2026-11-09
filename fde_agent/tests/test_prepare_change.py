@@ -8,7 +8,7 @@ from fde_agent.notes import Notes
 from fde_agent.store import run_now
 from fde_agent.tools.find_replacement import find_replacement
 from fde_agent.tools.get_order import get_order
-from fde_agent.tools.prepare_change import prepare_change
+from fde_agent.tools.prepare_change import ASK, NOT_YET, prepare_change
 from fde_agent.tools.verify_customer import verify_customer
 
 READS = {"get_user_details", "get_order_details", "get_product_details"}
@@ -118,7 +118,10 @@ def test_change_items_warning(yusuf, env):
     assert "- T-Shirt: size XXL -> XL ($53.27 -> $51.05)" in out.text
     assert "You get $2.22 back" in out.text
     assert "If you want an address or payment change on this order, tell me now" in out.text
-    assert "Have you told me every item you want changed in this order?" in out.text
+    assert "If you want to change any other item in this order, tell me now" in out.text
+    shown = yusuf.prepared.customer_text           # exactly what the customer will see
+    assert shown.count("?") == 1 and shown.endswith(ASK)                   # ONE question
+    assert shown.startswith(NOT_YET + "\n")              # says plainly nothing has happened yet
 
 
 # 7. returns: refund to original or a gift card only
@@ -202,3 +205,12 @@ def test_item_listed_more_times_than_in_order(yusuf, env):
     out = pc(yusuf, env, kind="return_items", order_id="#W2378156", payment_method_id="credit_card_9513926",
              item_ids=["item_1151293680", "item_1151293680"])
     assert not out.ok and "is in it only 1 time(s)" in out.text
+
+
+# The warnings are statements: the only question in a summary is the one in ASK.
+# A second question invites "No, nothing else. Go ahead", which the yes rule refuses.
+def test_warnings_ask_no_question():
+    from fde_agent.tools.prepare_change import ASK, WARN_CANCEL, WARN_DELIVERED, WARN_ITEMS
+    for warning in (WARN_ITEMS, WARN_DELIVERED.format(verb="exchange"), WARN_CANCEL):
+        assert "?" not in warning
+    assert ASK.count("?") == 1 and ASK.startswith("Shall I go ahead?")

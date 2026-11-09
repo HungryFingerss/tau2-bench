@@ -1,7 +1,8 @@
-"""Design files: loading, and proof that v0-baseline describes the real code.
+"""Design files: loading, and proof that each shipped design describes the real code.
 
 A design document is only useful if it is true, so these tests check its claims
-against the benchmark's source and saved runs.
+against the source and saved runs: v0-baseline against the benchmark's llm_agent,
+v1-fde-agent against fde_agent/.
 """
 
 import ast
@@ -15,25 +16,58 @@ import yaml
 
 from viewer.annotations import load_labels
 from viewer.designs import (
+    DEFAULT_ENTRY_POINT,
     DESIGNS_DIR,
     DesignError,
     Designs,
     UnknownDesign,
     compare_designs,
     current_hashes,
+    entry_point,
     load_design,
     normalized_hash,
     rebuild_prompt,
     source_status,
 )
-from viewer.store import DEFAULT_SIMULATIONS_DIR, REPO_ROOT
+from viewer.replay import benchmark_python
+from viewer.store import DEFAULT_SIMULATIONS_DIR, REPO_ROOT, read_json_file
+from viewer.tools import TOOLS_DIR, ToolRunner
 
 V0 = DESIGNS_DIR / "v0-baseline.yaml"
+V1 = DESIGNS_DIR / "v1-fde-agent.yaml"
+SHIPPED = [V0, V1]
 
 
 @pytest.fixture(scope="module")
 def design() -> dict:
     return load_design(V0)
+
+
+@pytest.fixture(scope="module")
+def v1() -> dict:
+    return load_design(V1)
+
+
+@pytest.fixture(scope="module", params=SHIPPED, ids=lambda path: path.stem)
+def shipped(request) -> dict:
+    """Each design in the repo, for the checks every design must pass."""
+    return load_design(request.param)
+
+
+def saved_agent_calls(implementation: str):
+    """(run info, raw agent call file) for every saved call of runs of one agent."""
+    for results in sorted(DEFAULT_SIMULATIONS_DIR.glob("*/results.json")):
+        info = read_json_file(results)["info"]  # In-place saves use cp1252.
+        if (info.get("agent_info") or {}).get("implementation") != implementation:
+            continue
+        pattern = str(results.parent / "artifacts/*/*/llm_debug/*agent_response*.json")
+        for path in sorted(glob.glob(pattern)):
+            yield info, Path(path)
+
+
+def system_text(call: dict) -> str:
+    content = call["request"]["messages"][0]["content"]
+    return "\n".join(content) if isinstance(content, list) else content
 
 
 def spans(path: Path) -> dict[str, tuple[int, int]]:
@@ -93,10 +127,10 @@ def test_d3_is_identity_verification(design):
     assert d3["code_enforces"] == "Nothing."
 
 
-def test_every_citation_points_at_real_code(design):
+def test_every_citation_points_at_real_code(shipped):
     """Each cited file, symbol and line range must exist exactly as stated."""
     checked = 0
-    for decision in design["decisions"]:
+    for decision in shipped["decisions"]:
         for source in decision["source"]:
             path = REPO_ROOT / source["file"]
             assert path.is_file(), source["file"]
@@ -147,17 +181,10 @@ def test_prompt_text_equals_the_code(design):
 def test_prompt_rebuilds_byte_for_byte_for_every_saved_call(design):
     """The composition rule must reproduce exactly what reached the model."""
     checked = 0
-    for results in DEFAULT_SIMULATIONS_DIR.glob("*/results.json"):
-        run_dir = results.parent
-        info = json.loads(results.read_text(encoding="utf-8"))["info"]
-        rebuilt = rebuild_prompt(design, info)
-        pattern = str(run_dir / "artifacts/*/*/llm_debug/*agent_response*.json")
-        for path in glob.glob(pattern):
-            call = json.loads(Path(path).read_text(encoding="utf-8"))
-            content = call["request"]["messages"][0]["content"]
-            saved = "\n".join(content) if isinstance(content, list) else content
-            assert saved == rebuilt, path
-            checked += 1
+    for info, path in saved_agent_calls("llm_agent"):
+        call = json.loads(path.read_text(encoding="utf-8"))
+        assert system_text(call) == rebuild_prompt(design, info), path
+        checked += 1
     if not checked:
         pytest.skip("no saved agent calls on this machine")
     assert checked >= 400
@@ -173,12 +200,10 @@ def test_policy_field_alone_is_not_the_prompt(design):
 
 
 def test_tools_match_a_saved_call_exactly(design):
-    paths = glob.glob(
-        str(DEFAULT_SIMULATIONS_DIR / "*/artifacts/*/*/llm_debug/*agent_response*.json")
-    )
-    if not paths:
+    first = next(saved_agent_calls("llm_agent"), None)
+    if first is None:
         pytest.skip("no saved agent calls on this machine")
-    tools = json.loads(Path(paths[0]).read_text(encoding="utf-8"))["request"]["tools"]
+    tools = json.loads(first[1].read_text(encoding="utf-8"))["request"]["tools"]
     saved = {t["function"]["name"]: t["function"] for t in tools}
     documented = {t["name"]: t for t in design["tools"]}
     assert set(saved) == set(documented)
@@ -202,22 +227,150 @@ def test_tool_kinds_match_the_decorators(design):
     assert {t["name"]: t["kind"] for t in design["tools"]} == kinds
 
 
-def test_recorded_hashes_match_the_files(design):
-    assert design["source_hashes"] == current_hashes(design)
-    assert source_status(design) == {"changed": [], "missing": []}
+def test_recorded_hashes_match_the_files(shipped):
+    assert shipped["source_hashes"] == current_hashes(shipped)
+    assert source_status(shipped) == {"changed": [], "missing": []}
 
 
-def test_label_links_use_real_labels_and_decisions(design):
+def test_label_links_use_real_labels_and_decisions(shipped):
     """New labels need no default links, so only the reverse direction is checked."""
     labels = {label["id"] for label in load_labels()}
-    decisions = {d["id"] for d in design["decisions"]}
-    assert set(design["label_links"]) <= labels
-    for linked in design["label_links"].values():
+    decisions = {d["id"] for d in shipped["decisions"]}
+    assert set(shipped["label_links"]) <= labels
+    for linked in shipped["label_links"].values():
         assert set(linked) <= decisions
 
 
-def test_code_paths_exist(design):
-    assert all((REPO_ROOT / path).exists() for path in design["code_paths"])
+def test_code_paths_exist(shipped):
+    assert all((REPO_ROOT / path).exists() for path in shipped["code_paths"])
+
+
+def test_baseline_starts_with_tau2_itself(design):
+    assert "entry_point" not in design
+    assert (
+        entry_point(design) == list(DEFAULT_ENTRY_POINT) == ["uv", "run", "tau2", "run"]
+    )
+
+
+# ---------- v1-fde-agent ----------
+
+
+def test_v1_decisions_are_f1_to_f27_and_never_reuse_baseline_ids(v1, design):
+    ids = [d["id"] for d in v1["decisions"]]
+    assert ids == [f"F{i}" for i in range(1, 28)]
+    assert not set(ids) & {d["id"] for d in design["decisions"]}
+
+
+def test_v1_addresses_point_at_real_baseline_decisions(v1, design):
+    baseline = {d["id"] for d in design["decisions"]}
+    linked = {d["id"]: d["addresses"] for d in v1["decisions"]}
+    assert all(isinstance(ids, list) for ids in linked.values())
+    for decision_id, ids in linked.items():
+        assert set(ids) <= baseline, decision_id
+    # The links the plan named, so they can't be dropped by accident.
+    for decision_id, wanted in {
+        "F1": "D1",
+        "F2": "D2",
+        "F5": "D15",
+        "F6": "D3",
+        "F7": "D14",
+        "F8": "D14",
+        "F10": "D11",
+        "F11": "D11",
+        "F12": "D11",
+        "F14": "D18",
+        "F17": "D17",
+    }.items():
+        assert wanted in linked[decision_id], decision_id
+    assert {"D15", "D14"} <= set(linked["F7"])
+    assert {"D6", "D13", "D18"} <= set(linked["F14"])
+
+
+def test_v1_is_for_fde_agent_and_starts_through_its_runner(v1):
+    designs = Designs()
+    assert v1["applies_to"]["agent_implementation"] == "fde_agent"
+    assert designs.for_agent("fde_agent")["version"] == "v1-fde-agent"
+    assert entry_point(v1) == ["uv", "run", "python", "-m", "fde_agent.run", "run"]
+    assert (REPO_ROOT / "fde_agent" / "run.py").is_file()
+    assert v1["code_paths"] == ["fde_agent/"]
+
+
+def test_v1_prompt_is_instructions_md_exactly(v1):
+    """prompt.load_instructions() reads the file and strips it."""
+    prompt = v1["system_prompt"]
+    text = (REPO_ROOT / prompt["file"]).read_text(encoding="utf-8").strip()
+    assert prompt["instruction"] == text
+    assert "template" not in prompt
+    assert rebuild_prompt(v1, {"environment_info": {"policy": "P"}}) == text
+
+
+def test_v1_prompt_matches_every_saved_call(v1):
+    checked = 0
+    for info, path in saved_agent_calls("fde_agent"):
+        call = json.loads(path.read_text(encoding="utf-8"))
+        assert system_text(call) == rebuild_prompt(v1, info), path
+        checked += 1
+    if not checked:
+        pytest.skip("no saved fde_agent calls on this machine")
+
+
+def test_v1_tools_match_a_saved_call(v1):
+    first = next(saved_agent_calls("fde_agent"), None)
+    if first is None:
+        pytest.skip("no saved fde_agent calls on this machine")
+    tools = json.loads(first[1].read_text(encoding="utf-8"))["request"]["tools"]
+    saved = [t["function"] for t in tools]
+    documented = [
+        {k: t[k] for k in ("name", "description", "parameters")} for t in v1["tools"]
+    ]
+    assert saved == documented
+
+
+@pytest.mark.skipif(
+    benchmark_python() is None or not TOOLS_DIR.is_dir(),
+    reason="the benchmark's .venv or fde_agent/ is missing",
+)
+def test_v1_tools_equal_the_modules(v1):
+    """NAME, DESCRIPTION and PARAMETERS of each module, read by the tools worker."""
+    reply = ToolRunner().catalog()
+    assert reply["ok"], reply
+    real = {t["name"]: t for t in reply["tools"]}
+    assert [t["name"] for t in v1["tools"]] == list(real)
+    for tool in v1["tools"]:
+        assert tool["description"] == real[tool["name"]]["description"]
+        assert tool["parameters"] == real[tool["name"]]["parameters"]
+    kinds = {t["name"]: t["kind"] for t in v1["tools"]}
+    assert [name for name, kind in kinds.items() if kind == "write"] == [
+        "confirm_change"
+    ]
+
+
+@pytest.mark.parametrize(
+    "file, line, text",
+    [
+        ("fde_agent/instructions.md", 10, "Before anything else, verify the customer"),
+        ("fde_agent/agent.py", 31, 'DEFAULT_MODEL = "ollama_chat/gpt-oss:20b"'),
+        ("fde_agent/agent.py", 55, 'self.llm_args["seed"] = seed'),
+        ("fde_agent/model_client.py", 38, "ATTEMPTS = 3"),
+        ("fde_agent/model_client.py", 194, '"temperature": 0.0'),
+        ("fde_agent/driver.py", 48, "MAX_FAILED_TRIES = 5"),
+        ("fde_agent/driver.py", 445, 'by="code"'),
+        ("fde_agent/driver.py", 458, "TRANSFER_MESSAGE"),
+        ("fde_agent/tools/get_order.py", 154, "Possible actions"),
+        ("fde_agent/tools/confirm_change.py", 171, "yield [change.call]"),
+    ],
+)
+def test_v1_key_lines_say_what_the_design_claims(file, line, text):
+    lines = (REPO_ROOT / file).read_text(encoding="utf-8").splitlines()
+    assert text in lines[line - 1]
+
+
+def test_v1_and_baseline_compare_without_errors(design, v1):
+    result = compare_designs(design, v1)
+    assert result["same"] is False
+    assert len(result["added"]) == 27 and len(result["removed"]) == 18   # F1-F27 vs D1-D18
+    assert result["instruction_changed"] and result["template_changed"]
+    assert "confirm_change" in result["tools_added"]
 
 
 def test_hash_ignores_line_endings(tmp_path):
@@ -235,9 +388,24 @@ def write(folder: Path, design: dict, name: str | None = None) -> Path:
 
 def test_shipped_designs_load():
     designs = Designs()
-    assert "v0-baseline" in designs.all()
+    assert {"v0-baseline", "v1-fde-agent"} <= set(designs.all())
     assert designs.problems() == []
     assert designs.get("v0-baseline")["title"]
+    assert designs.get("v1-fde-agent")["title"]
+
+
+@pytest.mark.parametrize("bad", [[], "uv run x", ["uv", ""], ["uv", 3]])
+def test_bad_entry_point_is_rejected(design, tmp_path, bad):
+    broken = {**copy.deepcopy(design), "entry_point": bad}
+    with pytest.raises(DesignError):
+        load_design(write(tmp_path, broken))
+
+
+def test_addresses_must_be_a_list(v1, tmp_path):
+    broken = copy.deepcopy(v1)
+    broken["decisions"][0]["addresses"] = "D1"
+    with pytest.raises(DesignError):
+        load_design(write(tmp_path, broken))
 
 
 def test_unknown_design():
@@ -307,6 +475,7 @@ def test_edits_are_picked_up_without_a_restart(design, tmp_path):
 def test_only_cited_files_can_be_read():
     designs = Designs()
     assert "class LLMAgent" in designs.read_source("src/tau2/agent/llm_agent.py")
+    assert "class Driver" in designs.read_source("fde_agent/driver.py")
     assert designs.read_source("pyproject.toml") is None
     assert designs.read_source(".env") is None
     assert designs.read_source("../../secrets.txt") is None

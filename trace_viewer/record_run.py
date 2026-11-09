@@ -5,7 +5,10 @@ Usage, from anywhere:
     .\\trace_viewer\\record_run.cmd --design v0-baseline --note "baseline" --name my-run
         -- --domain retail --agent-llm ollama_chat/gpt-oss:20b
 
-Everything after `--` goes to `tau2 run`. Next to the results this saves:
+Everything after `--` goes to the benchmark. The design file says how to start it:
+its `entry_point`, or `uv run tau2 run` if it names none. fde_agent's design starts
+`uv run python -m fde_agent.run run`, which registers the agent and then hands the
+same arguments to tau2. Next to the results this saves:
 
     run_meta.json        the exact command, date, note, design, commit, judge models
     agent_code.diff      uncommitted changes to the design's code_paths
@@ -27,7 +30,14 @@ from datetime import datetime
 from pathlib import Path
 
 from viewer import runmeta
-from viewer.designs import DesignError, Designs, UnknownDesign, source_status
+from viewer.designs import (
+    DEFAULT_ENTRY_POINT,
+    DesignError,
+    Designs,
+    UnknownDesign,
+    entry_point,
+    source_status,
+)
 from viewer.store import DEFAULT_SIMULATIONS_DIR, REPO_ROOT, has_results
 
 SAFE_NAME = re.compile(r"^[\w.-]+$")
@@ -96,8 +106,13 @@ def choose_name(options: argparse.Namespace, tau2_args: list[str]) -> str:
     return name
 
 
-def build_command(tau2_args: list[str], name: str, resume: bool) -> list[str]:
-    """`uv run tau2 run`, with the flags that make a run fully inspectable."""
+def build_command(
+    tau2_args: list[str],
+    name: str,
+    resume: bool,
+    start: list[str] | tuple[str, ...] = DEFAULT_ENTRY_POINT,
+) -> list[str]:
+    """The design's entry point, with the flags that make a run fully inspectable."""
     args = list(tau2_args)
     if not has_option(args, "--save-to", "--output"):
         args += ["--save-to", name]
@@ -109,7 +124,7 @@ def build_command(tau2_args: list[str], name: str, resume: bool) -> list[str]:
         args += ["--llm-log-mode", "all"]
     if resume and not has_option(args, "--auto-resume"):
         args += ["--auto-resume"]
-    return ["uv", "run", "tau2", "run", *args]
+    return [*start, *args]
 
 
 def _git(*args: str) -> str:
@@ -242,7 +257,7 @@ def record(
     for file in stale["changed"] + stale["missing"]:
         print(f"Warning: {file} changed since {options.design} was documented.")
 
-    command = build_command(tau2_args, name, options.resume)
+    command = build_command(tau2_args, name, options.resume, entry_point(design))
     git, diff = capture_code(design.get("code_paths") or [])
     session = {
         "started_at": datetime.now().isoformat(timespec="seconds"),

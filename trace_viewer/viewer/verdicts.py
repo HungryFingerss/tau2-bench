@@ -66,6 +66,29 @@ def message_counts(sim: dict) -> dict[str, int]:
     }
 
 
+def benchmark_steps(messages: list[dict]) -> int:
+    """Steps as the benchmark's max_steps counts them (Orchestrator.step).
+
+    One step is a customer message, an agent message, or one batch of tool results.
+    The opening greeting is set before the first step, so it is not one.
+    """
+    steps = 0
+    for index, message in enumerate(messages):
+        role = message.get("role")
+        if role == "user":
+            steps += 1
+        elif role == "assistant" and index > 0:
+            steps += 1 + bool(message.get("tool_calls"))  # Its tools' turn too.
+    return steps
+
+
+def model_calls_in(messages: list[dict]) -> int:
+    """Agent messages a model call produced, for agents without their own log."""
+    return sum(
+        1 for m in messages if m.get("role") == "assistant" and m.get("raw_data")
+    )
+
+
 def why(sim: dict, counts: dict[str, int]) -> str:
     """One line saying why this simulation did not pass."""
     result = result_state(sim)

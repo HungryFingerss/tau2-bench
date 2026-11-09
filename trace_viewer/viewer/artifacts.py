@@ -10,6 +10,7 @@ with a nearby file.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -22,6 +23,10 @@ LLM_DEBUG_DIR = "llm_debug"
 STATUS_FILE = "sim_status.json"
 LOG_FILE = "task.log"
 SIM_PREFIX = "sim_"
+# fde_agent's own log, next to llm_debug/. See fde_agent/LOG_FORMAT.md. The agent
+# writes it to a temp file with this prefix, then swaps it in.
+AGENT_LOG_FILE = "fde_agent_log.json"
+AGENT_LOG_TEMP_PREFIX = ".fde_log_"
 
 AGENT_CALL = "agent_response"
 CUSTOMER_CALL = "user_simulator_response"
@@ -96,6 +101,15 @@ def find_sim_dir(run_dir: Path, task_id: str, sim_id: str) -> Path | None:
     return next((d for d in attempt_dirs(run_dir, task_id) if d.name == wanted), None)
 
 
+def has_agent_log(sim_dir: Path) -> bool:
+    """From the folder listing, so a live agent's swap is never disturbed."""
+    try:
+        with os.scandir(sim_dir) as entries:
+            return any(entry.name == AGENT_LOG_FILE for entry in entries)
+    except OSError:
+        return False
+
+
 def read_status(sim_dir: Path) -> dict | None:
     try:
         return read_json_file(sim_dir / STATUS_FILE)
@@ -118,6 +132,7 @@ def describe_attempt(sim_dir: Path, current_ids: set[str]) -> dict[str, Any]:
         "started_at": files[0].stamp if files else None,
         "last_call_at": files[-1].stamp if files else None,
         "has_log": (sim_dir / LOG_FILE).is_file(),
+        "has_agent_log": has_agent_log(sim_dir),
     }
 
 

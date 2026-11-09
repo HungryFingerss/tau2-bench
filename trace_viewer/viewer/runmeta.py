@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from viewer.store import scan_results
+from viewer.artifacts import AGENT_LOG_FILE
+from viewer.store import SETTLE_SECONDS, scan_results
 
 META_FILE = "run_meta.json"
 DIFF_FILE = "agent_code.diff"
@@ -42,6 +43,9 @@ class ArtifactScan(NamedTuple):
     finished: int
     calls_in_progress: int
     newest_age_seconds: float | None
+    # Unfinished attempts' agent logs: (name, mtime_ns, size, settled). A log that is
+    # rewritten, or becomes safe to read, changes this, so the page refreshes.
+    agent_logs: tuple = ()
 
 
 def read_meta(run_dir: Path) -> dict[str, Any] | None:
@@ -63,16 +67,22 @@ def latest_session(meta: dict | None) -> dict | None:
     return sessions[-1] if sessions else None
 
 
-def _listing_age(folder: Path, name: str) -> float | None:
-    """Seconds since a file changed, read from the folder listing."""
+def _listing_stat(folder: Path, name: str) -> os.stat_result | None:
+    """A file's stat, read from the folder listing (no handle on the file)."""
     try:
         with os.scandir(folder) as entries:
             for entry in entries:
                 if entry.name == name:
-                    return time.time() - entry.stat(follow_symlinks=False).st_mtime
+                    return entry.stat(follow_symlinks=False)
     except OSError:
         pass
     return None
+
+
+def _listing_age(folder: Path, name: str) -> float | None:
+    """Seconds since a file changed, read from the folder listing."""
+    stat = _listing_stat(folder, name)
+    return None if stat is None else time.time() - stat.st_mtime
 
 
 def heartbeat_age(run_dir: Path) -> float | None:
@@ -95,6 +105,7 @@ def scan_artifacts(run_dir: Path) -> ArtifactScan:
     """Count attempts, and the model calls of those still unfinished."""
     attempts = finished = calls = 0
     newest: float | None = None
+    logs = []
     now = time.time()
     for task_dir in _subfolders(run_dir / ARTIFACTS_DIR):
         for sim_dir in _subfolders(task_dir):
@@ -102,6 +113,10 @@ def scan_artifacts(run_dir: Path) -> ArtifactScan:
             if _listing_age(sim_dir, STATUS_FILE) is not None:
                 finished += 1
                 continue
+            log = _listing_stat(sim_dir, AGENT_LOG_FILE)
+            if log is not None:
+                settled = now - log.st_mtime >= SETTLE_SECONDS
+                logs.append((sim_dir.name, log.st_mtime_ns, log.st_size, settled))
             try:
                 with os.scandir(sim_dir / LLM_DEBUG_DIR) as entries:
                     for entry in entries:
@@ -110,7 +125,7 @@ def scan_artifacts(run_dir: Path) -> ArtifactScan:
                         newest = age if newest is None else min(newest, age)
             except OSError:
                 pass
-    return ArtifactScan(attempts, finished, calls, newest)
+    return ArtifactScan(attempts, finished, calls, newest, tuple(sorted(logs)))
 
 
 def run_state(

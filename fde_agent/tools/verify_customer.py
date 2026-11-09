@@ -53,11 +53,13 @@ def _check_inputs(email: str, first_name: str, last_name: str, zip_code: str) ->
     if len(missing) == 3:
         raise ToolError(
             "Need the customer's email, or their first name, last name and zip code. "
-            "Ask the customer for one of these."
+            "Ask the customer for one of these.",
+            fact=False,
         )
     raise ToolError(
         f"Missing: {', '.join(missing)}. To verify by name, all three are needed "
-        f"(first name, last name, zip code). Or use the customer's email."
+        f"(first name, last name, zip code). Or use the customer's email.",
+        fact=False,
     )
 
 
@@ -78,16 +80,20 @@ def verify_customer(notes: Notes, email: str = "", first_name: str = "",
         [found] = yield [StoreCall("find_user_id_by_name_zip", {
             "first_name": first_name, "last_name": last_name, "zip": zip_code})]
     if found.error:
-        raise ToolError(_lookup_error(found.content, method))
+        raise ToolError(_lookup_error(found.content, method), fact=False)
     user_id = found.content.strip()
 
     # 2b. one customer per conversation (checked before reading their account)
     notes.check_same_customer(user_id)
 
+    # 2b'. the same customer again, nothing changed since (F25): no need to reload
+    if notes.verified and notes.verified[0] == user_id and notes.verified[2] == len(notes.done):
+        return notes.verified[1] + "\n(Already verified in this conversation; nothing changed since.)"
+
     # 2c. their account
     [details] = yield [StoreCall("get_user_details", {"user_id": user_id})]
     if details.error:
-        raise ToolError(f"Could not load the customer's account ({details.content}).")
+        raise ToolError(f"Could not load the customer's account ({details.content}).", fact=False)
     user = json.loads(details.content)
 
     # 2d. every order, in one batch
@@ -97,7 +103,7 @@ def verify_customer(notes: Notes, email: str = "", first_name: str = "",
     for i, r in enumerate(order_results):  # (not zip(): `zip` is a parameter here)
         oid = user["orders"][i]
         if r.error:
-            raise ToolError(f"Could not load order {oid} ({r.content}).")
+            raise ToolError(f"Could not load order {oid} ({r.content}).", fact=False)
         orders.append(json.loads(r.content))
 
     # 2e. write the notes
@@ -105,9 +111,11 @@ def verify_customer(notes: Notes, email: str = "", first_name: str = "",
     notes.set_customer(user_id, name)
     notes.payment_methods = {p["id"]: fmt.payment_name(p) for p in user["payment_methods"].values()}
     for o in orders:
-        notes.record_order(o["order_id"], o["status"])
+        notes.record_order(o["order_id"], o["status"], o["items"])
 
-    return shape(user, orders, method)
+    text = shape(user, orders, method)
+    notes.verified = (user_id, text, len(notes.done))
+    return text
 
 
 def _lookup_error(content: str, method: str) -> str:

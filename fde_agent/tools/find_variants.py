@@ -57,11 +57,11 @@ def norm(text: str) -> str:
 
 def _check(notes: Notes, product_id: str, product_name: str, options) -> None:
     if notes.customer is None:
-        raise ToolError("Verify the customer first (verify_customer).")
+        raise ToolError("Verify the customer first (verify_customer).", fact=False)
     if not product_id.strip() and not product_name.strip():
-        raise ToolError("Give a product_id (from get_order) or a product_name.")
+        raise ToolError("Give a product_id (from get_order) or a product_name.", fact=False)
     if options is not None and not isinstance(options, dict):
-        raise ToolError('options must be an object of option name -> value, e.g. {"color": "blue"}.')
+        raise ToolError('options must be an object of option name -> value, e.g. {"color": "blue"}.', fact=False)
 
 
 # ---------- 2. fetch ----------
@@ -78,12 +78,12 @@ def find_variants(notes: Notes, product_id: str = "", product_name: str = "",
     else:
         [types] = yield [StoreCall("list_all_product_types", {})]
         if types.error:
-            raise ToolError(f"Could not list products ({types.content}).")
+            raise ToolError(f"Could not list products ({types.content}).", fact=False)
         raw_id = _product_by_name(product_name, json.loads(types.content))
 
     [r] = yield [StoreCall("get_product_details", {"product_id": raw_id})]
     if r.error:
-        raise ToolError(f"Could not load product {label(PRODUCT, raw_id)} ({r.content}).")
+        raise ToolError(f"Could not load product {label(PRODUCT, raw_id)} ({r.content}).", fact=False)
     product = json.loads(r.content)
     variants = list(product["variants"].values())
 
@@ -101,7 +101,7 @@ def _product_by_name(name: str, types: dict[str, str]) -> str:
     for real_name, pid in types.items():
         if norm(real_name) == norm(name):
             return pid
-    raise ToolError(f"No product called '{name}'. Products are: {', '.join(sorted(types))}.")
+    raise ToolError(f"No product called '{name}'. Products are: {', '.join(sorted(types))}.", fact=True)
 
 
 # ---------- 3a. matching (pure) ----------
@@ -124,12 +124,13 @@ def resolve_options(product_name: str, variants: list[dict], wanted: dict[str, s
         real_name = next((n for n in real if norm(n) == norm(name)), None)
         if real_name is None:
             listing = "; ".join(f"{n} ({', '.join(vals)})" for n, vals in real.items())
-            raise ToolError(f"{product_name} has no option '{name}'. Its options are: {listing}.")
+            raise ToolError(f"{product_name} has no option '{name}'. Its options are: {listing}.", fact=True)
         real_value = next((x for x in real[real_name] if norm(x) == norm(value)), None)
         if real_value is None:
             raise ToolError(
                 f"{product_name} has no {real_name} '{value}'. "
-                f"Values for {real_name}: {', '.join(real[real_name])}."
+                f"Values for {real_name}: {', '.join(real[real_name])}.",
+                fact=True,
             )
         resolved[real_name] = real_value
     return resolved

@@ -48,9 +48,13 @@ class Notes:
     changes_made: int = 0                   # numbering: #1, #2, ...
     shown: int | None = None                # number of the change code has shown the customer
     reply: str | None = None                # customer's latest message AFTER it was shown
+    reply_is_yes: bool | None = None        # the yes-checker's verdict on `reply`, once asked (F19)
     done: set[int] = field(default_factory=set)  # confirmed change numbers
     transferred: bool = False               # after a transfer, every tool refuses
     transfer_warned: int | None = None      # change number the transfer reminder was given for
+    order_products: dict[str, dict[str, str]] = field(default_factory=dict)  # order -> {product_id: name}
+    announce: tuple[int, str] | None = None  # (change number, text) code tells the customer: done (F22)
+    verified: tuple[str, str, int] | None = None  # (user_id, account text, changes done then) (F25)
 
     def check_open(self) -> None:
         """First line of every tool: nothing is possible after a transfer."""
@@ -71,11 +75,14 @@ class Notes:
         self.check_same_customer(user_id)
         self.customer = Customer(user_id, name)
 
-    def record_order(self, order_id: str, status: str) -> None:
-        """Remember an order of the verified customer and its latest known status."""
+    def record_order(self, order_id: str, status: str, items: list[dict] | None = None) -> None:
+        """Remember an order of the verified customer, its latest known status and,
+        when given, which products are in it."""
         if self.customer is None:
             raise NotesError("Verify the customer before looking at orders.")
         self.orders[order_id] = status
+        if items is not None:
+            self.order_products[order_id] = {it["product_id"]: it["name"] for it in items}
 
     def is_customers_order(self, order_id: str) -> bool:
         return order_id in self.orders
@@ -84,7 +91,7 @@ class Notes:
         """Store a new prepared change. It replaces any earlier unconfirmed one."""
         self.changes_made += 1
         self.prepared = PreparedChange(self.changes_made, kind, call, customer_text)
-        self.shown, self.reply = None, None
+        self.shown, self.reply, self.reply_is_yes = None, None, None
         return self.prepared
 
     # --- called by the agent loop (not by the model) ---
@@ -92,12 +99,12 @@ class Notes:
     def mark_shown(self, number: int) -> None:
         """Code sent change #number's summary to the customer, word for word."""
         if self.prepared is not None and self.prepared.number == number:
-            self.shown, self.reply = number, None
+            self.shown, self.reply, self.reply_is_yes = number, None, None
 
     def customer_said(self, text: str) -> None:
         """Every customer message. Only one AFTER the summary was shown counts as a reply."""
         if self.prepared is not None and self.shown == self.prepared.number:
-            self.reply = text
+            self.reply, self.reply_is_yes = text, None
 
     # --- called by confirm_change ---
 
@@ -105,4 +112,4 @@ class Notes:
         """The prepared change was run (confirmed=True) or dropped after a store error."""
         if confirmed and self.prepared is not None:
             self.done.add(self.prepared.number)
-        self.prepared, self.shown, self.reply = None, None, None
+        self.prepared, self.shown, self.reply, self.reply_is_yes = None, None, None, None

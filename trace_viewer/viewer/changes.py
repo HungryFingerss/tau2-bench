@@ -57,6 +57,13 @@ class Changes:
             state = runmeta.run_state(run_dir, meta, None, None, activity)
             token = [stamps.get(RESULTS_FILE), stamps.get(runmeta.META_FILE), state]
             if scan:
-                token.extend([scan.attempts, scan.finished, scan.calls_in_progress])
+                token.extend(
+                    [
+                        scan.attempts,
+                        scan.finished,
+                        scan.calls_in_progress,
+                        scan.agent_logs,
+                    ]
+                )
             runs[name] = {"token": repr(token), "state": state}
         return {"runs": runs}
